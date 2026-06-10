@@ -12,8 +12,6 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN yt-dlp -U
-
 RUN python -c "import whisper; whisper.load_model('base')"
 
 COPY app.py .

@@ -413,7 +413,7 @@ Respond ONLY with valid JSON, no markdown:
         text = r.json()['content'][0]['text'].replace('```json','').replace('```','').strip()
         return json.loads(text)
     except Exception as e:
-        logger.error(f'Script generation error: {{e}}')
+        logger.error(f'Script generation error: {e}')
         return None
 
 
@@ -425,7 +425,7 @@ def text_to_speech(text, output_path):
         tts.save(output_path)
         return os.path.exists(output_path)
     except Exception as e:
-        logger.error(f'TTS error: {{e}}')
+        logger.error(f'TTS error: {e}')
         return False
 
 
@@ -443,7 +443,7 @@ def overlay_narration(video_path, narration_path, output_path, narration_volume=
         subprocess.run(cmd, check=True, timeout=120)
         return os.path.exists(output_path)
     except Exception as e:
-        logger.error(f'Narration overlay error: {{e}}')
+        logger.error(f'Narration overlay error: {e}')
         return False
 
 
@@ -460,7 +460,7 @@ def add_text_overlay(video_path, text, output_path, position='top'):
         subprocess.run(cmd, check=True, timeout=60)
         return os.path.exists(output_path)
     except Exception as e:
-        logger.error(f'Text overlay error: {{e}}')
+        logger.error(f'Text overlay error: {e}')
         return False
 
 
@@ -488,7 +488,7 @@ def concatenate_clips(clip_paths, output_path):
             os.remove(concat_file)
         return os.path.exists(output_path)
     except Exception as e:
-        logger.error(f'Concat error: {{e}}')
+        logger.error(f'Concat error: {e}')
         return False
 
 
@@ -578,7 +578,7 @@ def process_ai_content_job(job_id, params):
                 start = max(0, duration * 0.2)  # Start 20% in to skip intros
                 cut_vertical(clip_path, start, clip_duration, cut_path, vertical, watermark_text)
             except Exception as e:
-                add_log(job_id, f'   ❌ Cut failed: {{e}}')
+                add_log(job_id, f'   ❌ Cut failed: {e}')
                 continue
 
             # Add narration
@@ -630,7 +630,7 @@ def process_ai_content_job(job_id, params):
                 )
                 add_log(job_id, f'   ✅ Live: https://youtube.com/shorts/{{yt_id}}')
             except Exception as e:
-                add_log(job_id, f'   ❌ Upload failed: {{e}}')
+                add_log(job_id, f'   ❌ Upload failed: {e}')
 
         # ZIP for download
         zip_name = f'{{work_dir}}/ai_content_{{job_id[:8]}}.zip'
@@ -653,7 +653,7 @@ def process_ai_content_job(job_id, params):
         }})
 
     except Exception as e:
-        add_log(job_id, f'❌ Fatal error: {{e}}')
+        add_log(job_id, f'❌ Fatal error: {e}')
         update_job(job_id, {{'status': 'error', 'error': str(e)}})
     finally:
         pass  # Keep files for download
@@ -681,7 +681,7 @@ def search_best_video(query, cookies_file=None):
                     }}
                 except: continue
     except Exception as e:
-        logger.error(f'Search error: {{e}}')
+        logger.error(f'Search error: {e}')
     return None
 
 

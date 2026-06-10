@@ -83,8 +83,10 @@ def fetch_video_info(mode, search_query, youtube_url, other_urls,
             if mode == 'trending' else [search_query]
         )
         for q in queries:
+            proxy = os.environ.get('PROXY_URL', '')
             cmd = ['yt-dlp','--dump-json','--no-playlist','--no-warnings',
-                   '--flat-playlist','--match-filter','duration >= 60 & duration <= 7200']
+                   '--flat-playlist','--match-filter','duration >= 60 & duration <= 7200',
+                   '--no-check-certificates'] + (['--proxy', proxy] if proxy else [])
             if days:
                 cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
                 cmd += ['--dateafter', cutoff]
@@ -111,7 +113,9 @@ def fetch_video_info(mode, search_query, youtube_url, other_urls,
             videos.sort(key=lambda x: x.get('view_count', 0), reverse=True)
 
     elif mode == 'url':
-        cmd = ['yt-dlp','--dump-json','--no-playlist','--no-warnings', youtube_url]
+        proxy = os.environ.get('PROXY_URL', '')
+        cmd = ['yt-dlp','--dump-json','--no-playlist','--no-warnings',
+               '--no-check-certificates'] + (['--proxy', proxy] if proxy else []) + [youtube_url]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         for line in r.stdout.strip().split('\n'):
             if not line.strip(): continue
@@ -132,7 +136,9 @@ def fetch_video_info(mode, search_query, youtube_url, other_urls,
     elif mode == 'other':
         for url in other_urls:
             if not url.strip(): continue
-            r = subprocess.run(['yt-dlp','--dump-json','--no-playlist','--no-warnings', url.strip()],
+            proxy = os.environ.get('PROXY_URL', '')
+            proxy_args = ['--proxy', proxy] if proxy else []
+            r = subprocess.run(['yt-dlp','--dump-json','--no-playlist','--no-warnings','--no-check-certificates'] + proxy_args + [url.strip()],
                 capture_output=True, text=True, timeout=60)
             for line in r.stdout.strip().split('\n'):
                 if not line.strip(): continue
@@ -320,11 +326,15 @@ def process_job(job_id, params):
 
         for v in selected_videos:
             add_log(job_id, f'   ⬇️  {v["title"][:50]}...')
+            proxy = os.environ.get('PROXY_URL', '')
             cmd = ['yt-dlp',
                    '--format', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                    '--merge-output-format', 'mp4',
                    '--output', f'{raw_dir}/%(id)s_%(title).40s.%(ext)s',
-                   '--no-playlist', '--no-warnings']
+                   '--no-playlist', '--no-warnings',
+                   '--no-check-certificates',
+                   '--extractor-retries', '3',
+                   ] + (['--proxy', proxy] if proxy else [])
             if v.get('platform') == 'instagram':
                 cmd += ['--add-header', 'User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)']
             elif v.get('platform') == 'tiktok':

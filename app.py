@@ -336,7 +336,7 @@ def process_job(job_id, params):
                    '--extractor-retries', '3',
                    '--sleep-interval', '2',
                    '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                   '--player-client', 'web,default',
+                   '--extractor-args', 'youtube:player_client=web',
                    ] + (['--proxy', proxy] if proxy else [])
             if v.get('platform') == 'instagram':
                 cmd += ['--add-header', 'User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)']

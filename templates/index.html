@@ -1006,6 +1006,87 @@ function deselectAll() { selectedVideos=[]; updateSelection(); }
 // ============================================================
 // Generate
 // ============================================================
+async function downloadAndUploadVideos(jobId, videos) {
+  const total = videos.length;
+  for (let i = 0; i < videos.length; i++) {
+    const v = videos[i];
+    const logBox = document.getElementById('logBox');
+    logBox.textContent += `
+[Browser] ⬇️ Fetching ${v.title.substring(0,40)}...`;
+    logBox.scrollTop = logBox.scrollHeight;
+
+    try {
+      // Get cobalt download URL via our proxy
+      const cobaltRes = await fetch('/api/cobalt', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url: v.url})
+      });
+      const cobaltData = await cobaltRes.json();
+
+      if (cobaltData.error) {
+        logBox.textContent += `
+[Browser] ⚠️ Cobalt failed: ${cobaltData.error}`;
+        continue;
+      }
+
+      let downloadUrl = cobaltData.url;
+      
+      // Handle picker (multiple streams)
+      if (cobaltData.status === 'picker') {
+        const videoItem = cobaltData.picker?.find(p => p.type === 'video');
+        downloadUrl = videoItem?.url;
+      }
+
+      if (!downloadUrl) {
+        logBox.textContent += `
+[Browser] ⚠️ No download URL from cobalt`;
+        continue;
+      }
+
+      logBox.textContent += `
+[Browser] 📥 Downloading video...`;
+      logBox.scrollTop = logBox.scrollHeight;
+
+      // Download video in browser
+      const videoRes = await fetch(downloadUrl);
+      const blob = await videoRes.blob();
+
+      logBox.textContent += `
+[Browser] ⬆️ Uploading to server (${(blob.size/1024/1024).toFixed(1)}MB)...`;
+      logBox.scrollTop = logBox.scrollHeight;
+
+      // Upload to Railway
+      const formData = new FormData();
+      formData.append('job_id', jobId);
+      formData.append('video_id', v.id);
+      formData.append('video', blob, `${v.id}.mp4`);
+
+      const uploadRes = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData
+      });
+      const uploadData = await uploadRes.json();
+
+      if (uploadData.success) {
+        logBox.textContent += `
+[Browser] ✅ Uploaded (${uploadData.size_mb}MB)`;
+      } else {
+        logBox.textContent += `
+[Browser] ❌ Upload failed: ${uploadData.error}`;
+      }
+
+    } catch(e) {
+      logBox.textContent += `
+[Browser] ❌ Error: ${e.message}`;
+    }
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+  logBox.textContent += `
+[Browser] ✅ All videos ready — server processing starting...`;
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
 async function generateShorts() {
   if(!selectedVideos.length) { alert('Select at least one video'); return; }
   const btn = document.getElementById('generateBtn');

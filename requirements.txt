@@ -1,6 +1,6 @@
 flask==3.0.0
 gunicorn==21.2.0
-yt-dlp
+yt-dlp==2024.11.4
 librosa==0.10.1
 openai-whisper
 numpy==1.26.4

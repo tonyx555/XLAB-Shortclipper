@@ -330,6 +330,18 @@ def process_job(job_id, params):
             with open(cookies_file, 'w') as cf:
                 cf.write(yt_cookies)
 
+        # List available formats for first video (debug)
+        if selected_videos and cookies_file:
+            debug_cmd = ['yt-dlp', '--list-formats', '--no-warnings',
+                        '--cookies', cookies_file]
+            proxy = os.environ.get('PROXY_URL', '')
+            if proxy:
+                debug_cmd += ['--proxy', proxy]
+            debug_cmd.append(selected_videos[0]['url'])
+            debug_result = subprocess.run(debug_cmd, capture_output=True, text=True, timeout=60)
+            add_log(job_id, f'Available formats: {debug_result.stdout[:1000]}')
+            add_log(job_id, f'Format errors: {debug_result.stderr[:500]}')
+
         add_log(job_id, f'📥 Downloading {len(selected_videos)} video(s)...')
 
         for v in selected_videos:

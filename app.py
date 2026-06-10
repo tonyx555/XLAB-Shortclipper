@@ -147,13 +147,15 @@ def fetch_video_info(mode, search_query, youtube_url, other_urls,
         for q in queries:
             proxy = os.environ.get('PROXY_URL', '')
             cmd = ['yt-dlp','--dump-json','--no-playlist','--no-warnings',
-                   '--flat-playlist','--match-filter','duration >= 60 & duration <= 7200',
-                   '--no-check-certificates'] + (['--proxy', proxy] if proxy else [])
+                   '--flat-playlist',
+                   '--no-check-certificates',
+                   '--extractor-args', 'youtube:player_client=web',
+                   ] + (['--proxy', proxy] if proxy else [])
             if days:
                 cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
                 cmd += ['--dateafter', cutoff]
             cmd.append(f'ytsearch{max_videos}:{q}')
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
             for line in r.stdout.strip().split('\n'):
                 if not line.strip(): continue
                 try:

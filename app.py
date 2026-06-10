@@ -302,40 +302,73 @@ def upload_to_youtube(video_path, title, description, hashtags, access_token):
 
 def download_via_cobalt(url, output_dir, video_id, job_id):
     """Try to download video using cobalt.tools API."""
-    try:
-        import requests as req
-        headers = {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-        }
-        payload = {
-            'url': url,
-            'videoQuality': '720',
-            'filenameStyle': 'basic',
-        }
-        r = req.post('https://api.cobalt.tools/', json=payload, headers=headers, timeout=30)
-        logger.info(f'Cobalt response: {r.status_code} {r.text[:500]}')
-        data = r.json()
-        logger.info(f'Cobalt data: {data}')
-        
-        if data.get('status') in ['stream', 'redirect', 'tunnel']:
-            download_url = data.get('url')
-            if download_url:
-                output_path = os.path.join(output_dir, f'{video_id}.mp4')
-                r2 = req.get(download_url, stream=True, timeout=300)
-                with open(output_path, 'wb') as f:
-                    for chunk in r2.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
-                    return output_path
-                else:
-                    logger.info(f'Cobalt file too small or missing')
-        else:
-            logger.info(f'Cobalt bad status: {data.get("status")} error: {data.get("error")}')
-        return None
-    except Exception as e:
-        logger.error(f'Cobalt exception: {e}')
-        return None
+    import requests as req
+
+    # Try multiple cobalt instances
+    cobalt_instances = [
+        'https://api.cobalt.tools',
+        'https://cobalt.api.timelessnesses.me',
+        'https://cobalt.canine.tools',
+    ]
+
+    for instance in cobalt_instances:
+        try:
+            headers = {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (compatible; XLAB/1.0)',
+            }
+            payload = {
+                'url': url,
+                'videoQuality': '720',
+                'filenameStyle': 'basic',
+                'downloadMode': 'auto',
+            }
+            logger.info(f'Trying cobalt instance: {instance}')
+            r = req.post(f'{instance}/', json=payload, headers=headers, timeout=30)
+            logger.info(f'Cobalt {instance} response: {r.status_code} {r.text[:500]}')
+            
+            if r.status_code != 200:
+                continue
+                
+            data = r.json()
+            logger.info(f'Cobalt data: {data}')
+
+            if data.get('status') in ['stream', 'redirect', 'tunnel']:
+                download_url = data.get('url')
+                if download_url:
+                    output_path = os.path.join(output_dir, f'{video_id}.mp4')
+                    r2 = req.get(download_url, stream=True, timeout=300,
+                                headers={'User-Agent': 'Mozilla/5.0'})
+                    with open(output_path, 'wb') as f:
+                        for chunk in r2.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+                        return output_path
+            elif data.get('status') == 'picker':
+                # Multiple streams - pick first video
+                items = data.get('picker', [])
+                for item in items:
+                    if item.get('type') == 'video':
+                        download_url = item.get('url')
+                        if download_url:
+                            output_path = os.path.join(output_dir, f'{video_id}.mp4')
+                            r2 = req.get(download_url, stream=True, timeout=300)
+                            with open(output_path, 'wb') as f:
+                                for chunk in r2.iter_content(chunk_size=8192):
+                                    f.write(chunk)
+                            if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+                                return output_path
+                            break
+            else:
+                logger.info(f'Cobalt bad status: {data.get("status")} error: {data.get("error")}')
+                continue
+
+        except Exception as e:
+            logger.error(f'Cobalt instance {instance} failed: {e}')
+            continue
+
+    return None
 
 def process_job(job_id, params):
     work_dir = f'/tmp/job_{job_id}'
@@ -385,16 +418,23 @@ def process_job(job_id, params):
         for v in selected_videos:
             add_log(job_id, f'   ⬇️  {v["title"][:50]}...')
             
-            # Try cobalt.tools first (handles YouTube PO token)
-            add_log(job_id, f'   🔄 Trying cobalt.tools...')
-            downloaded_path = download_via_cobalt(v['url'], raw_dir, v['id'], job_id)
-            
-            if downloaded_path:
-                add_log(job_id, f'   ✅ Downloaded via cobalt')
+            # Check browser upload first
+            if v['id'] in browser_uploads:
+                # Copy to raw_dir
+                import shutil as sh
+                dest = os.path.join(raw_dir, f'{v["id"]}.mp4')
+                sh.copy2(browser_uploads[v['id']], dest)
+                add_log(job_id, f'   ✅ Using browser upload')
             else:
-                add_log(job_id, f'   ⚠️ Cobalt failed — check Railway logs for details')
-                # Fallback to yt-dlp
-                add_log(job_id, f'   ↩️  Trying yt-dlp fallback...')
+                # Try cobalt fallback
+                add_log(job_id, f'   🔄 Trying cobalt.tools...')
+                downloaded_path = download_via_cobalt(v['url'], raw_dir, v['id'], job_id)
+                
+                if downloaded_path:
+                    add_log(job_id, f'   ✅ Downloaded via cobalt')
+                else:
+                    add_log(job_id, f'   ⚠️ Cobalt failed — check Railway logs for details')
+                    add_log(job_id, f'   ↩️  Trying yt-dlp fallback...')
                 proxy = os.environ.get('PROXY_URL', '')
                 cmd = ['yt-dlp',
                        '--format', 'best',
@@ -533,6 +573,33 @@ GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 def index():
     return render_template('index.html', google_client_id=GOOGLE_CLIENT_ID)
 
+@app.route('/api/upload', methods=['POST'])
+def upload_video():
+    """Receive video uploaded from browser and save to temp storage."""
+    try:
+        job_id = request.form.get('job_id')
+        video_id = request.form.get('video_id')
+        
+        if not job_id or not video_id:
+            return jsonify({'error': 'Missing job_id or video_id'}), 400
+        
+        file = request.files.get('video')
+        if not file:
+            return jsonify({'error': 'No video file'}), 400
+        
+        # Save to temp location
+        upload_dir = f'/tmp/uploads/{job_id}'
+        os.makedirs(upload_dir, exist_ok=True)
+        save_path = f'{upload_dir}/{video_id}.mp4'
+        file.save(save_path)
+        
+        size_mb = os.path.getsize(save_path) / (1024*1024)
+        logger.info(f'Uploaded {video_id} for job {job_id}: {size_mb:.1f}MB')
+        
+        return jsonify({'success': True, 'path': save_path, 'size_mb': round(size_mb,1)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/search', methods=['POST'])
 def search():
     data = request.json
@@ -554,14 +621,25 @@ def search():
 def create_job():
     params  = request.json
     job_id  = str(uuid.uuid4())
+    pending_uploads = params.pop('pending_uploads', False)
     update_job(job_id, {
         'id': job_id, 'status': 'queued',
         'created_at': datetime.now().isoformat(),
-        'progress': 0, 'logs': []
+        'progress': 0, 'logs': [],
+        'uploads_ready': not pending_uploads
     })
     thread = threading.Thread(target=process_job, args=(job_id, params), daemon=True)
     thread.start()
     return jsonify({'job_id': job_id})
+
+@app.route('/api/jobs/<job_id>/start', methods=['POST'])
+def start_job(job_id):
+    """Signal that browser uploads are done and processing can begin."""
+    job = get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    update_job(job_id, {'uploads_ready': True})
+    return jsonify({'success': True})
 
 @app.route('/api/jobs/<job_id>', methods=['GET'])
 def job_status(job_id):
@@ -588,6 +666,42 @@ def download_zip(job_id):
         return jsonify({'error': 'File not found'}), 404
     return send_file(zip_path, as_attachment=True,
                      download_name=f'xlab_shorts_{job_id[:8]}.zip')
+
+@app.route('/api/cobalt', methods=['POST'])
+def cobalt_proxy():
+    """Proxy cobalt.tools request to avoid CORS issues in browser."""
+    import requests as req
+    data = request.json
+    url = data.get('url')
+    
+    cobalt_instances = [
+        'https://api.cobalt.tools',
+        'https://cobalt.api.timelessnesses.me',
+        'https://cobalt.canine.tools',
+    ]
+    
+    for instance in cobalt_instances:
+        try:
+            headers = {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+            }
+            payload = {
+                'url': url,
+                'videoQuality': '720',
+                'filenameStyle': 'basic',
+                'downloadMode': 'auto',
+            }
+            r = req.post(f'{instance}/', json=payload, headers=headers, timeout=30)
+            if r.status_code == 200:
+                result = r.json()
+                if result.get('status') in ['stream', 'redirect', 'tunnel', 'picker']:
+                    return jsonify(result)
+        except Exception as e:
+            logger.error(f'Cobalt proxy error {instance}: {e}')
+            continue
+    
+    return jsonify({'error': 'All cobalt instances failed'}), 500
 
 @app.route('/health')
 def health():

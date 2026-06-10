@@ -340,7 +340,10 @@ def process_job(job_id, params):
             elif v.get('platform') == 'tiktok':
                 cmd += ['--add-header', 'User-Agent:TikTok 26.2.0 rv:262018 (iPhone; iOS 14.4.2; en_US) Cronet']
             cmd.append(v['url'])
-            subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                add_log(job_id, f'      yt-dlp error: {result.stderr[-500:] if result.stderr else "no error output"}')
+                add_log(job_id, f'      stdout: {result.stdout[-300:] if result.stdout else "empty"}')
 
         downloaded = glob.glob(f'{raw_dir}/*.mp4')
         add_log(job_id, f'✅ Downloaded {len(downloaded)} file(s)')

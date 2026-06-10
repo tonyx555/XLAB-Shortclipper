@@ -28,6 +28,63 @@ YT_CLIENT_SECRET = os.environ.get('YT_CLIENT_SECRET', '')
 # In-memory job store
 # ============================================================
 JOBS = {}  # job_id -> dict
+SCHEDULES = {}  # schedule_id -> dict
+
+def run_scheduled_jobs():
+    """Background thread that checks and runs scheduled jobs every minute."""
+    import time as t
+    while True:
+        try:
+            now = datetime.now()
+            for sid, schedule in list(SCHEDULES.items()):
+                if not schedule.get('active'):
+                    continue
+                run_hour = int(schedule.get('hour', 9))
+                run_minute = int(schedule.get('minute', 0))
+                last_run = schedule.get('last_run', '')
+                today = now.strftime('%Y-%m-%d')
+                if (now.hour == run_hour and now.minute == run_minute and last_run != today):
+                    logger.info(f'Running schedule {sid}: {schedule["query"]}')
+                    SCHEDULES[sid]['last_run'] = today
+                    job_id = str(uuid.uuid4())
+                    params = {
+                        'mode': schedule.get('mode', 'search'),
+                        'search_query': schedule.get('query', ''),
+                        'trending_topic': schedule.get('query', ''),
+                        'date_filter': 'This Week',
+                        'max_videos': int(schedule.get('max_videos', 3)),
+                        'clip_length': int(schedule.get('clip_length', 45)),
+                        'clips_per_video': int(schedule.get('clips_per_video', 3)),
+                        'captions': schedule.get('captions', 'No'),
+                        'caption_lang': 'en',
+                        'watermark_enabled': schedule.get('watermark_enabled', 'No'),
+                        'watermark_text': schedule.get('watermark_text', ''),
+                        'watermark_position': 'bottom_right',
+                        'ai_metadata': schedule.get('ai_metadata', 'No'),
+                        'claude_api_key': schedule.get('claude_api_key', '') or CLAUDE_API_KEY,
+                        'topic': schedule.get('query', ''),
+                        'auto_upload': schedule.get('auto_upload', 'No'),
+                        'yt_access_token': schedule.get('yt_access_token', ''),
+                        'uploads_ready': True,
+                    }
+                    JOBS[job_id] = {
+                        'id': job_id, 'status': 'queued',
+                        'created_at': now.isoformat(),
+                        'progress': 0, 'logs': [],
+                        'uploads_ready': True,
+                        'schedule_id': sid,
+                        'schedule_name': schedule.get('name', '')
+                    }
+                    SCHEDULES[sid].setdefault('job_history', []).append(job_id)
+                    t2 = threading.Thread(target=process_job, args=(job_id, params), daemon=True)
+                    t2.start()
+        except Exception as e:
+            logger.error(f'Scheduler error: {e}')
+        t.sleep(60)
+
+# Start scheduler background thread
+_scheduler = threading.Thread(target=run_scheduled_jobs, daemon=True)
+_scheduler.start()
 
 def update_job(job_id, data):
     if job_id not in JOBS:
@@ -244,6 +301,385 @@ def burn_captions(clip_path, out_path, lang='en'):
     ], check=True)
     os.remove(srt)
 
+def add_trending_music(clip_path, out_path, music_style='energetic', volume=0.3):
+    """Add royalty-free trending music to a clip using ffmpeg.
+    Music styles: energetic, hype, chill, dramatic
+    Volume: 0.0-1.0 (default 0.3 to keep original audio audible)
+    """
+    import urllib.request as urlreq
+
+    # Royalty-free music URLs by style (from Free Music Archive / Pixabay)
+    music_tracks = {
+        'energetic': [
+            'https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0c6ff1bab.mp3',
+            'https://cdn.pixabay.com/download/audio/2021/11/25/audio_5bdc1b2b5b.mp3',
+        ],
+        'hype': [
+            'https://cdn.pixabay.com/download/audio/2022/03/15/audio_942571cd04.mp3',
+            'https://cdn.pixabay.com/download/audio/2022/08/02/audio_884fe92c21.mp3',
+        ],
+        'chill': [
+            'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3',
+            'https://cdn.pixabay.com/download/audio/2021/08/04/audio_0625a2a5d8.mp3',
+        ],
+        'dramatic': [
+            'https://cdn.pixabay.com/download/audio/2022/10/25/audio_aee0a35f23.mp3',
+            'https://cdn.pixabay.com/download/audio/2022/01/20/audio_d39a4c7eb6.mp3',
+        ],
+    }
+
+    tracks = music_tracks.get(music_style, music_tracks['energetic'])
+    music_url = tracks[0]
+    music_path = f'/tmp/music_{music_style}.mp3'
+
+    try:
+        # Download music if not cached
+        if not os.path.exists(music_path):
+            urlreq.urlretrieve(music_url, music_path)
+
+        # Mix music with original audio
+        # -filter_complex: mix original audio + music at set volume
+        cmd = [
+            'ffmpeg', '-i', clip_path, '-i', music_path,
+            '-filter_complex',
+            f'[0:a]volume=1.0[orig];[1:a]volume={volume}[music];[orig][music]amix=inputs=2:duration=first:dropout_transition=2[aout]',
+            '-map', '0:v', '-map', '[aout]',
+            '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+            '-shortest', '-y', out_path, '-loglevel', 'quiet'
+        ]
+        subprocess.run(cmd, check=True, timeout=120)
+
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 10000:
+            return True
+        return False
+
+    except Exception as e:
+        logger.error(f'Music error: {e}')
+        return False
+
+
+# ============================================================
+# LEVEL 3 — AI Content Creation
+# ============================================================
+
+def generate_ai_script(topic, num_points, duration_per_point, api_key):
+    """Use Claude to write a structured video script for any topic."""
+    import requests as req
+
+    if not api_key:
+        # Fallback script
+        return {
+            'title': topic,
+            'hook': f'You need to know about {topic}',
+            'points': [{'title': f'Point {i+1}', 'search_query': topic, 'narration': f'Here is point {i+1} about {topic}'} for i in range(num_points)],
+            'outro': 'Follow for more content like this'
+        }
+
+    prompt = f"""You are a viral YouTube Shorts scriptwriter. Write a script for this topic:
+
+Topic: "{topic}"
+Number of points/clips: {num_points}
+Duration per clip: {duration_per_point} seconds
+
+The script should be punchy, engaging, and optimized for YouTube Shorts virality.
+
+Respond ONLY with valid JSON, no markdown:
+{{
+  "title": "catchy video title with emoji under 60 chars",
+  "hook": "opening line spoken in first 2 seconds, must grab attention immediately",
+  "points": [
+    {{
+      "title": "point title",
+      "search_query": "specific YouTube search query to find matching footage (be specific e.g. 'Ronaldo bicycle kick Champions League 2018')",
+      "narration": "2-3 sentences spoken over this clip, punchy and engaging",
+      "duration": {duration_per_point}
+    }}
+  ],
+  "outro": "closing call to action, max 1 sentence",
+  "hashtags": ["#Shorts", "5 more relevant hashtags"]
+}}"""
+
+    try:
+        r = req.post('https://api.anthropic.com/v1/messages',
+            headers={{'x-api-key': api_key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'}},
+            json={{'model': 'claude-sonnet-4-20250514', 'max_tokens': 2000,
+                  'messages': [{{'role': 'user', 'content': prompt}}]}},
+            timeout=30)
+        text = r.json()['content'][0]['text'].replace('```json','').replace('```','').strip()
+        return json.loads(text)
+    except Exception as e:
+        logger.error(f'Script generation error: {{e}}')
+        return None
+
+
+def text_to_speech(text, output_path):
+    """Convert text to speech using gTTS (free, no API key needed)."""
+    try:
+        from gtts import gTTS
+        tts = gTTS(text=text, lang='en', slow=False)
+        tts.save(output_path)
+        return os.path.exists(output_path)
+    except Exception as e:
+        logger.error(f'TTS error: {{e}}')
+        return False
+
+
+def overlay_narration(video_path, narration_path, output_path, narration_volume=0.8):
+    """Mix narration audio over video, reducing original audio."""
+    try:
+        cmd = [
+            'ffmpeg', '-i', video_path, '-i', narration_path,
+            '-filter_complex',
+            f'[0:a]volume=0.2[orig];[1:a]volume={{narration_volume}}[narr];[orig][narr]amix=inputs=2:duration=first[aout]',
+            '-map', '0:v', '-map', '[aout]',
+            '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+            '-shortest', '-y', output_path, '-loglevel', 'quiet'
+        ]
+        subprocess.run(cmd, check=True, timeout=120)
+        return os.path.exists(output_path)
+    except Exception as e:
+        logger.error(f'Narration overlay error: {{e}}')
+        return False
+
+
+def add_text_overlay(video_path, text, output_path, position='top'):
+    """Add text title card overlay to video."""
+    try:
+        y_pos = '50' if position == 'top' else 'h-th-50'
+        safe_text = text.replace("'", "\'").replace(':', '\:')
+        vf = f"drawtext=text='{{safe_text}}':fontsize=36:fontcolor=white:x=(w-tw)/2:y={{y_pos}}:box=1:boxcolor=black@0.6:boxborderw=10:font=Arial:fontweight=bold"
+        cmd = [
+            'ffmpeg', '-i', video_path, '-vf', vf,
+            '-c:a', 'copy', '-y', output_path, '-loglevel', 'quiet'
+        ]
+        subprocess.run(cmd, check=True, timeout=60)
+        return os.path.exists(output_path)
+    except Exception as e:
+        logger.error(f'Text overlay error: {{e}}')
+        return False
+
+
+def concatenate_clips(clip_paths, output_path):
+    """Concatenate multiple clips into one video."""
+    try:
+        if len(clip_paths) == 1:
+            import shutil
+            shutil.copy2(clip_paths[0], output_path)
+            return True
+
+        # Create concat file
+        concat_file = output_path.replace('.mp4', '_concat.txt')
+        with open(concat_file, 'w') as f:
+            for cp in clip_paths:
+                f.write(f"file '{{cp}}'\n")
+
+        cmd = [
+            'ffmpeg', '-f', 'concat', '-safe', '0',
+            '-i', concat_file,
+            '-c', 'copy', '-y', output_path, '-loglevel', 'quiet'
+        ]
+        subprocess.run(cmd, check=True, timeout=300)
+        if os.path.exists(concat_file):
+            os.remove(concat_file)
+        return os.path.exists(output_path)
+    except Exception as e:
+        logger.error(f'Concat error: {{e}}')
+        return False
+
+
+def process_ai_content_job(job_id, params):
+    """Level 3 — Full AI video assembly from a topic prompt."""
+    work_dir = f'/tmp/aicontent_{{job_id}}'
+    clips_dir = f'{{work_dir}}/clips'
+    out_dir = f'{{work_dir}}/output'
+    tts_dir = f'{{work_dir}}/tts'
+
+    try:
+        os.makedirs(clips_dir, exist_ok=True)
+        os.makedirs(out_dir, exist_ok=True)
+        os.makedirs(tts_dir, exist_ok=True)
+        update_job(job_id, {{'status': 'processing', 'started_at': datetime.now().isoformat()}})
+
+        topic = params.get('topic', '')
+        num_points = int(params.get('num_points', 5))
+        clip_duration = int(params.get('clip_duration', 45))
+        claude_key = params.get('claude_api_key', '') or CLAUDE_API_KEY
+        auto_upload = params.get('auto_upload') == 'Yes'
+        yt_token = params.get('yt_access_token', '')
+        music_enabled = params.get('music_enabled') == 'Yes'
+        music_style = params.get('music_style', 'energetic')
+        watermark_text = params.get('watermark_text', '') if params.get('watermark_enabled') == 'Yes' else ''
+
+        add_log(job_id, f'🤖 Generating script for: "{{topic}}"...')
+        update_job(job_id, {{'progress': 5}})
+
+        # Step 1 — Generate script
+        script = generate_ai_script(topic, num_points, clip_duration, claude_key)
+        if not script:
+            raise Exception('Failed to generate script')
+
+        add_log(job_id, f'📝 Script ready: "{{script["title"]}}"')
+        add_log(job_id, f'   Hook: {{script["hook"][:80]}}...')
+        add_log(job_id, f'   {{len(script["points"])}} points to find footage for')
+        update_job(job_id, {{'progress': 10, 'script': script}})
+
+        # Step 2 — Find and download clips for each point
+        assembled_clips = []
+        cookies_file = None
+        yt_cookies = os.environ.get('YT_COOKIES', '')
+        if yt_cookies:
+            cookies_file = f'{{work_dir}}/cookies.txt'
+            with open(cookies_file, 'w') as cf:
+                cf.write(yt_cookies)
+
+        for idx, point in enumerate(script['points']):
+            add_log(job_id, f'\n🔍 Point {{idx+1}}/{{len(script["points"])}}: {{point["title"]}}')
+            add_log(job_id, f'   Searching: "{{point["search_query"]}}"')
+            update_job(job_id, {{'progress': 10 + int((idx / len(script['points'])) * 50)}})
+
+            # Search and download
+            clip_path = None
+
+            # Try cobalt first
+            search_result = search_best_video(point['search_query'], cookies_file)
+            if search_result:
+                add_log(job_id, f'   📹 Found: {{search_result["title"][:50]}}')
+                clip_path = download_via_cobalt(search_result['url'], clips_dir, f'point_{{idx}}', job_id)
+
+            # Fallback to yt-dlp
+            if not clip_path:
+                proxy = os.environ.get('PROXY_URL', '')
+                cmd = ['yt-dlp', '--format', 'best', '--merge-output-format', 'mp4',
+                       '--output', f'{{clips_dir}}/point_{{idx}}.mp4',
+                       '--no-playlist', '--no-warnings', '--no-check-certificates',
+                       '--extractor-args', 'youtube:player_client=web',
+                       f'ytsearch1:{{point["search_query"]}}']
+                if proxy: cmd += ['--proxy', proxy]
+                if cookies_file: cmd += ['--cookies', cookies_file]
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                found = glob.glob(f'{{clips_dir}}/point_{{idx}}*.mp4')
+                if found:
+                    clip_path = found[0]
+
+            if not clip_path or not os.path.exists(clip_path):
+                add_log(job_id, f'   ⚠️ No footage found — skipping point')
+                continue
+
+            # Cut to required duration
+            cut_path = f'{{clips_dir}}/cut_{{idx}}.mp4'
+            vertical = is_vertical(clip_path)
+            try:
+                duration = get_duration(clip_path)
+                start = max(0, duration * 0.2)  # Start 20% in to skip intros
+                cut_vertical(clip_path, start, clip_duration, cut_path, vertical, watermark_text)
+            except Exception as e:
+                add_log(job_id, f'   ❌ Cut failed: {{e}}')
+                continue
+
+            # Add narration
+            narration_text = point.get('narration', '')
+            if narration_text and claude_key:
+                add_log(job_id, f'   🎙️ Adding narration...')
+                tts_path = f'{{tts_dir}}/narr_{{idx}}.mp3'
+                if text_to_speech(narration_text, tts_path):
+                    narr_out = f'{{clips_dir}}/narr_{{idx}}.mp4'
+                    if overlay_narration(cut_path, tts_path, narr_out):
+                        cut_path = narr_out
+
+            # Add point title overlay
+            title_out = f'{{clips_dir}}/titled_{{idx}}.mp4'
+            if add_text_overlay(cut_path, point['title'], title_out):
+                cut_path = title_out
+
+            assembled_clips.append(cut_path)
+            add_log(job_id, f'   ✅ Point {{idx+1}} ready')
+
+        if not assembled_clips:
+            raise Exception('No clips assembled — all points failed')
+
+        add_log(job_id, f'\n🎬 Assembling {{len(assembled_clips)}} clips...')
+        update_job(job_id, {{'progress': 70}})
+
+        # Step 3 — Concatenate all clips
+        final_path = f'{{out_dir}}/{{job_id}}_ai_video.mp4'
+        if not concatenate_clips(assembled_clips, final_path):
+            raise Exception('Failed to concatenate clips')
+
+        # Step 4 — Add music if enabled
+        if music_enabled:
+            add_log(job_id, f'🎵 Adding {{music_style}} music...')
+            music_out = final_path.replace('.mp4', '_music.mp4')
+            if add_trending_music(final_path, music_out, music_style, 0.25):
+                os.replace(music_out, final_path)
+
+        # Step 5 — Auto upload to YouTube
+        yt_id = ''
+        if auto_upload and yt_token:
+            add_log(job_id, f'📤 Uploading to YouTube...')
+            update_job(job_id, {{'progress': 85}})
+            try:
+                desc = f'{{script.get("hook", "")}}\n\n{{" ".join(script.get("hashtags", ["#Shorts"]))}}'
+                yt_id = upload_to_youtube(
+                    final_path, script['title'], desc,
+                    script.get('hashtags', ['#Shorts']), yt_token
+                )
+                add_log(job_id, f'   ✅ Live: https://youtube.com/shorts/{{yt_id}}')
+            except Exception as e:
+                add_log(job_id, f'   ❌ Upload failed: {{e}}')
+
+        # ZIP for download
+        zip_name = f'{{work_dir}}/ai_content_{{job_id[:8]}}.zip'
+        with zipfile.ZipFile(zip_name, 'w') as zf:
+            zf.write(final_path, os.path.basename(final_path))
+
+        zip_size = os.path.getsize(zip_name) / (1024*1024)
+        add_log(job_id, f'\n🎉 AI Video ready! ({{zip_size:.1f}}MB)')
+        if yt_id:
+            add_log(job_id, f'▶️ Watch: https://youtube.com/shorts/{{yt_id}}')
+
+        update_job(job_id, {{
+            'status': 'done', 'progress': 100,
+            'completed_at': datetime.now().isoformat(),
+            'zip_path': zip_name,
+            'zip_size_mb': round(zip_size, 1),
+            'yt_id': yt_id,
+            'script': script,
+            'total_clips': len(assembled_clips)
+        }})
+
+    except Exception as e:
+        add_log(job_id, f'❌ Fatal error: {{e}}')
+        update_job(job_id, {{'status': 'error', 'error': str(e)}})
+    finally:
+        pass  # Keep files for download
+
+
+def search_best_video(query, cookies_file=None):
+    """Search YouTube for best matching video."""
+    try:
+        proxy = os.environ.get('PROXY_URL', '')
+        cmd = ['yt-dlp', '--dump-json', '--no-playlist', '--no-warnings',
+               '--flat-playlist', '--match-filter', 'duration >= 30 & duration <= 7200',
+               '--no-check-certificates']
+        if proxy: cmd += ['--proxy', proxy]
+        if cookies_file: cmd += ['--cookies', cookies_file]
+        cmd.append(f'ytsearch1:{{query}}')
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        for line in r.stdout.strip().split('\n'):
+            if line.strip():
+                try:
+                    info = json.loads(line)
+                    return {{
+                        'id': info.get('id', ''),
+                        'title': info.get('title', '')[:60],
+                        'url': info.get('webpage_url') or f'https://youtube.com/watch?v={{info.get("id","")}}',
+                    }}
+                except: continue
+    except Exception as e:
+        logger.error(f'Search error: {{e}}')
+    return None
+
+
 def generate_ai_metadata(video_title, clip_index, topic, api_key):
     import requests as req
     if not api_key.strip():
@@ -386,6 +822,9 @@ def process_job(job_id, params):
         captions         = params.get('captions', 'No') == 'Yes'
         caption_lang     = params.get('caption_lang', 'en')
         wm_text          = params.get('watermark_text', '') if params.get('watermark_enabled') == 'Yes' else ''
+        music_enabled    = params.get('music_enabled') == 'Yes'
+        music_style      = params.get('music_style', 'energetic')
+        music_volume     = float(params.get('music_volume', 0.3))
         wm_pos           = params.get('watermark_position', 'bottom_right')
         ai_enabled       = params.get('ai_metadata') == 'Yes'
         claude_key       = params.get('claude_api_key', '') or CLAUDE_API_KEY
@@ -721,6 +1160,68 @@ def cobalt_proxy():
             continue
     
     return jsonify({'error': 'All cobalt instances failed'}), 500
+
+@app.route('/api/ai-content', methods=['POST'])
+def create_ai_content():
+    params = request.json
+    job_id = str(uuid.uuid4())
+    update_job(job_id, {
+        'id': job_id, 'status': 'queued',
+        'created_at': datetime.now().isoformat(),
+        'progress': 0, 'logs': [],
+        'type': 'ai_content',
+        'topic': params.get('topic', '')
+    })
+    thread = threading.Thread(target=process_ai_content_job, args=(job_id, params), daemon=True)
+    thread.start()
+    return jsonify({'job_id': job_id})
+
+@app.route('/api/schedules', methods=['GET'])
+def get_schedules():
+    return jsonify(list(SCHEDULES.values()))
+
+@app.route('/api/schedules', methods=['POST'])
+def create_schedule():
+    data = request.json
+    sid = str(uuid.uuid4())
+    schedule = {
+        'id': sid,
+        'name': data.get('name', 'My Schedule'),
+        'query': data.get('query', ''),
+        'mode': data.get('mode', 'search'),
+        'hour': int(data.get('hour', 9)),
+        'minute': int(data.get('minute', 0)),
+        'timezone': data.get('timezone', 'Europe/Paris'),
+        'max_videos': int(data.get('max_videos', 3)),
+        'clip_length': int(data.get('clip_length', 45)),
+        'clips_per_video': int(data.get('clips_per_video', 3)),
+        'captions': data.get('captions', 'No'),
+        'watermark_enabled': data.get('watermark_enabled', 'No'),
+        'watermark_text': data.get('watermark_text', ''),
+        'ai_metadata': data.get('ai_metadata', 'No'),
+        'auto_upload': data.get('auto_upload', 'No'),
+        'yt_access_token': data.get('yt_access_token', ''),
+        'active': True,
+        'created_at': datetime.now().isoformat(),
+        'last_run': '',
+        'job_history': []
+    }
+    SCHEDULES[sid] = schedule
+    return jsonify(schedule)
+
+@app.route('/api/schedules/<sid>', methods=['DELETE'])
+def delete_schedule(sid):
+    if sid in SCHEDULES:
+        del SCHEDULES[sid]
+        return jsonify({'success': True})
+    return jsonify({'error': 'Not found'}), 404
+
+@app.route('/api/schedules/<sid>/toggle', methods=['POST'])
+def toggle_schedule(sid):
+    if sid in SCHEDULES:
+        SCHEDULES[sid]['active'] = not SCHEDULES[sid].get('active', True)
+        return jsonify(SCHEDULES[sid])
+    return jsonify({'error': 'Not found'}), 404
 
 @app.route('/health')
 def health():

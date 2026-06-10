@@ -1,6 +1,6 @@
 flask==3.0.0
 gunicorn==21.2.0
-yt-dlp==2024.11.4
+yt-dlp>=2024.11.4
 librosa==0.10.1
 openai-whisper
 numpy==1.26.4
@@ -9,3 +9,6 @@ setuptools
 google-auth==2.29.0
 google-auth-oauthlib==1.2.0
 google-api-python-client==2.125.0
+gTTS==2.5.1
+mediapipe==0.10.9
+opencv-python-headless==4.8.1.78

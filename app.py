@@ -1010,15 +1010,14 @@ def process_job(job_id, params):
                 out_tmpl = f'{raw_dir}/{v["id"]}.%(ext)s'
                 cmd = [
                     'yt-dlp',
-                    '--format', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best',
+                    '--format', 'best[ext=mp4]/best',
                     '--merge-output-format', 'mp4',
                     '--output', out_tmpl,
                     '--no-playlist', '--no-warnings',
                     '--proxy', proxy,
                     '--socket-timeout', '30',
                     '--retries', '3',
-                    '--fragment-retries', '3',
-                    '--extractor-args', 'youtube:player_client=web,web_creator',
+                    '--extractor-args', 'youtube:player_client=web',
                     '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 ]
                 if cookies_file:

@@ -435,7 +435,7 @@ def overlay_narration(video_path, narration_path, output_path, narration_volume=
         cmd = [
             'ffmpeg', '-i', video_path, '-i', narration_path,
             '-filter_complex',
-            f'[0:a]volume=0.2[orig];[1:a]volume={{narration_volume}}[narr];[orig][narr]amix=inputs=2:duration=first[aout]',
+            f'[0:a]volume=0.2[orig];[1:a]volume={narration_volume}[narr];[orig][narr]amix=inputs=2:duration=first[aout]',
             '-map', '0:v', '-map', '[aout]',
             '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
             '-shortest', '-y', output_path, '-loglevel', 'quiet'
@@ -452,7 +452,7 @@ def add_text_overlay(video_path, text, output_path, position='top'):
     try:
         y_pos = '50' if position == 'top' else 'h-th-50'
         safe_text = text.replace("'", "\'").replace(':', '\:')
-        vf = f"drawtext=text='{{safe_text}}':fontsize=36:fontcolor=white:x=(w-tw)/2:y={{y_pos}}:box=1:boxcolor=black@0.6:boxborderw=10:font=Arial:fontweight=bold"
+        vf = f"drawtext=text='{safe_text}':fontsize=36:fontcolor=white:x=(w-tw)/2:y={y_pos}:box=1:boxcolor=black@0.6:boxborderw=10:font=Arial:fontweight=bold"
         cmd = [
             'ffmpeg', '-i', video_path, '-vf', vf,
             '-c:a', 'copy', '-y', output_path, '-loglevel', 'quiet'
@@ -476,7 +476,7 @@ def concatenate_clips(clip_paths, output_path):
         concat_file = output_path.replace('.mp4', '_concat.txt')
         with open(concat_file, 'w') as f:
             for cp in clip_paths:
-                f.write(f"file '{{cp}}'\n")
+                f.write(f"file '{cp}'\n")
 
         cmd = [
             'ffmpeg', '-f', 'concat', '-safe', '0',
@@ -494,10 +494,10 @@ def concatenate_clips(clip_paths, output_path):
 
 def process_ai_content_job(job_id, params):
     """Level 3 — Full AI video assembly from a topic prompt."""
-    work_dir = f'/tmp/aicontent_{{job_id}}'
-    clips_dir = f'{{work_dir}}/clips'
-    out_dir = f'{{work_dir}}/output'
-    tts_dir = f'{{work_dir}}/tts'
+    work_dir = f'/tmp/aicontent_{job_id}'
+    clips_dir = f'{work_dir}/clips'
+    out_dir = f'{work_dir}/output'
+    tts_dir = f'{work_dir}/tts'
 
     try:
         os.makedirs(clips_dir, exist_ok=True)
@@ -515,7 +515,7 @@ def process_ai_content_job(job_id, params):
         music_style = params.get('music_style', 'energetic')
         watermark_text = params.get('watermark_text', '') if params.get('watermark_enabled') == 'Yes' else ''
 
-        add_log(job_id, f'🤖 Generating script for: "{{topic}}"...')
+        add_log(job_id, f'🤖 Generating script for: "{topic}"...')
         update_job(job_id, {{'progress': 5}})
 
         # Step 1 — Generate script
@@ -523,9 +523,9 @@ def process_ai_content_job(job_id, params):
         if not script:
             raise Exception('Failed to generate script')
 
-        add_log(job_id, f'📝 Script ready: "{{script["title"]}}"')
-        add_log(job_id, f'   Hook: {{script["hook"][:80]}}...')
-        add_log(job_id, f'   {{len(script["points"])}} points to find footage for')
+        add_log(job_id, f'📝 Script ready: "{script["title"]}"')
+        add_log(job_id, f'   Hook: {script["hook"][:80]}...')
+        add_log(job_id, f'   {len(script["points"])} points to find footage for')
         update_job(job_id, {{'progress': 10, 'script': script}})
 
         # Step 2 — Find and download clips for each point
@@ -533,13 +533,13 @@ def process_ai_content_job(job_id, params):
         cookies_file = None
         yt_cookies = os.environ.get('YT_COOKIES', '')
         if yt_cookies:
-            cookies_file = f'{{work_dir}}/cookies.txt'
+            cookies_file = f'{work_dir}/cookies.txt'
             with open(cookies_file, 'w') as cf:
                 cf.write(yt_cookies)
 
         for idx, point in enumerate(script['points']):
-            add_log(job_id, f'\n🔍 Point {{idx+1}}/{{len(script["points"])}}: {{point["title"]}}')
-            add_log(job_id, f'   Searching: "{{point["search_query"]}}"')
+            add_log(job_id, f'\n🔍 Point {idx+1}/{len(script["points"])}: {point["title"]}')
+            add_log(job_id, f'   Searching: "{point["search_query"]}"')
             update_job(job_id, {{'progress': 10 + int((idx / len(script['points'])) * 50)}})
 
             # Search and download
@@ -548,21 +548,21 @@ def process_ai_content_job(job_id, params):
             # Try cobalt first
             search_result = search_best_video(point['search_query'], cookies_file)
             if search_result:
-                add_log(job_id, f'   📹 Found: {{search_result["title"][:50]}}')
-                clip_path = download_via_cobalt(search_result['url'], clips_dir, f'point_{{idx}}', job_id)
+                add_log(job_id, f'   📹 Found: {search_result["title"][:50]}')
+                clip_path = download_via_cobalt(search_result['url'], clips_dir, f'point_{idx}', job_id)
 
             # Fallback to yt-dlp
             if not clip_path:
                 proxy = os.environ.get('PROXY_URL', '')
                 cmd = ['yt-dlp', '--format', 'best', '--merge-output-format', 'mp4',
-                       '--output', f'{{clips_dir}}/point_{{idx}}.mp4',
+                       '--output', f'{clips_dir}/point_{idx}.mp4',
                        '--no-playlist', '--no-warnings', '--no-check-certificates',
                        '--extractor-args', 'youtube:player_client=web',
-                       f'ytsearch1:{{point["search_query"]}}']
+                       f'ytsearch1:{point["search_query"]}']
                 if proxy: cmd += ['--proxy', proxy]
                 if cookies_file: cmd += ['--cookies', cookies_file]
                 r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                found = glob.glob(f'{{clips_dir}}/point_{{idx}}*.mp4')
+                found = glob.glob(f'{clips_dir}/point_{idx}*.mp4')
                 if found:
                     clip_path = found[0]
 
@@ -571,7 +571,7 @@ def process_ai_content_job(job_id, params):
                 continue
 
             # Cut to required duration
-            cut_path = f'{{clips_dir}}/cut_{{idx}}.mp4'
+            cut_path = f'{clips_dir}/cut_{idx}.mp4'
             vertical = is_vertical(clip_path)
             try:
                 duration = get_duration(clip_path)
@@ -585,34 +585,34 @@ def process_ai_content_job(job_id, params):
             narration_text = point.get('narration', '')
             if narration_text and claude_key:
                 add_log(job_id, f'   🎙️ Adding narration...')
-                tts_path = f'{{tts_dir}}/narr_{{idx}}.mp3'
+                tts_path = f'{tts_dir}/narr_{idx}.mp3'
                 if text_to_speech(narration_text, tts_path):
-                    narr_out = f'{{clips_dir}}/narr_{{idx}}.mp4'
+                    narr_out = f'{clips_dir}/narr_{idx}.mp4'
                     if overlay_narration(cut_path, tts_path, narr_out):
                         cut_path = narr_out
 
             # Add point title overlay
-            title_out = f'{{clips_dir}}/titled_{{idx}}.mp4'
+            title_out = f'{clips_dir}/titled_{idx}.mp4'
             if add_text_overlay(cut_path, point['title'], title_out):
                 cut_path = title_out
 
             assembled_clips.append(cut_path)
-            add_log(job_id, f'   ✅ Point {{idx+1}} ready')
+            add_log(job_id, f'   ✅ Point {idx+1} ready')
 
         if not assembled_clips:
             raise Exception('No clips assembled — all points failed')
 
-        add_log(job_id, f'\n🎬 Assembling {{len(assembled_clips)}} clips...')
+        add_log(job_id, f'\n🎬 Assembling {len(assembled_clips)} clips...')
         update_job(job_id, {{'progress': 70}})
 
         # Step 3 — Concatenate all clips
-        final_path = f'{{out_dir}}/{{job_id}}_ai_video.mp4'
+        final_path = f'{out_dir}/{job_id}_ai_video.mp4'
         if not concatenate_clips(assembled_clips, final_path):
             raise Exception('Failed to concatenate clips')
 
         # Step 4 — Add music if enabled
         if music_enabled:
-            add_log(job_id, f'🎵 Adding {{music_style}} music...')
+            add_log(job_id, f'🎵 Adding {music_style} music...')
             music_out = final_path.replace('.mp4', '_music.mp4')
             if add_trending_music(final_path, music_out, music_style, 0.25):
                 os.replace(music_out, final_path)
@@ -623,24 +623,24 @@ def process_ai_content_job(job_id, params):
             add_log(job_id, f'📤 Uploading to YouTube...')
             update_job(job_id, {{'progress': 85}})
             try:
-                desc = f'{{script.get("hook", "")}}\n\n{{" ".join(script.get("hashtags", ["#Shorts"]))}}'
+                desc = f'{script.get("hook", "")}\n\n{{" ".join(script.get("hashtags", ["#Shorts"]))}}'
                 yt_id = upload_to_youtube(
                     final_path, script['title'], desc,
                     script.get('hashtags', ['#Shorts']), yt_token
                 )
-                add_log(job_id, f'   ✅ Live: https://youtube.com/shorts/{{yt_id}}')
+                add_log(job_id, f'   ✅ Live: https://youtube.com/shorts/{yt_id}')
             except Exception as e:
                 add_log(job_id, f'   ❌ Upload failed: {e}')
 
         # ZIP for download
-        zip_name = f'{{work_dir}}/ai_content_{{job_id[:8]}}.zip'
+        zip_name = f'{work_dir}/ai_content_{job_id[:8]}.zip'
         with zipfile.ZipFile(zip_name, 'w') as zf:
             zf.write(final_path, os.path.basename(final_path))
 
         zip_size = os.path.getsize(zip_name) / (1024*1024)
-        add_log(job_id, f'\n🎉 AI Video ready! ({{zip_size:.1f}}MB)')
+        add_log(job_id, f'\n🎉 AI Video ready! ({zip_size:.1f}MB)')
         if yt_id:
-            add_log(job_id, f'▶️ Watch: https://youtube.com/shorts/{{yt_id}}')
+            add_log(job_id, f'▶️ Watch: https://youtube.com/shorts/{yt_id}')
 
         update_job(job_id, {{
             'status': 'done', 'progress': 100,
@@ -668,7 +668,7 @@ def search_best_video(query, cookies_file=None):
                '--no-check-certificates']
         if proxy: cmd += ['--proxy', proxy]
         if cookies_file: cmd += ['--cookies', cookies_file]
-        cmd.append(f'ytsearch1:{{query}}')
+        cmd.append(f'ytsearch1:{query}')
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         for line in r.stdout.strip().split('\n'):
             if line.strip():
@@ -677,7 +677,7 @@ def search_best_video(query, cookies_file=None):
                     return {{
                         'id': info.get('id', ''),
                         'title': info.get('title', '')[:60],
-                        'url': info.get('webpage_url') or f'https://youtube.com/watch?v={{info.get("id","")}}',
+                        'url': info.get('webpage_url') or f'https://youtube.com/watch?v={info.get("id","")}',
                     }}
                 except: continue
     except Exception as e:
@@ -876,50 +876,91 @@ def process_job(job_id, params):
                     browser_uploads[vid_id] = os.path.join(upload_dir, fname)
         add_log(job_id, f'📱 Browser uploads found: {len(browser_uploads)}')
 
+        proxy = os.environ.get('PROXY_URL', '')
         add_log(job_id, f'📥 Processing {len(selected_videos)} video(s)...')
+        if proxy:
+            add_log(job_id, f'   🔒 Using residential proxy for downloads')
+        else:
+            add_log(job_id, f'   ⚠️ No proxy set — add PROXY_URL env variable')
 
         for v in selected_videos:
             add_log(job_id, f'   ⬇️  {v["title"][:50]}...')
-            
+            downloaded_path = None
+
             # Check browser upload first
             if v['id'] in browser_uploads:
-                # Copy to raw_dir
                 import shutil as sh
                 dest = os.path.join(raw_dir, f'{v["id"]}.mp4')
                 sh.copy2(browser_uploads[v['id']], dest)
                 add_log(job_id, f'   ✅ Using browser upload')
-            else:
-                # Try cobalt fallback
-                add_log(job_id, f'   🔄 Trying cobalt.tools...')
-                downloaded_path = download_via_cobalt(v['url'], raw_dir, v['id'], job_id)
-                
-                if downloaded_path:
-                    add_log(job_id, f'   ✅ Downloaded via cobalt')
-                else:
-                    add_log(job_id, f'   ⚠️ Cobalt failed — check Railway logs for details')
-                    add_log(job_id, f'   ↩️  Trying yt-dlp fallback...')
-                proxy = os.environ.get('PROXY_URL', '')
-                cmd = ['yt-dlp',
-                       '--format', 'best',
-                       '--merge-output-format', 'mp4',
-                       '--output', f'{raw_dir}/%(id)s_%(title).40s.%(ext)s',
-                       '--no-playlist', '--no-warnings',
-                       '--no-check-certificates',
-                       '--extractor-args', 'youtube:player_client=web',
-                       ] + (['--proxy', proxy] if proxy else []) + (['--cookies', cookies_file] if cookies_file else [])
-                if v.get('platform') == 'instagram':
-                    cmd += ['--add-header', 'User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)']
-                elif v.get('platform') == 'tiktok':
-                    cmd += ['--add-header', 'User-Agent:TikTok 26.2.0 rv:262018 (iPhone; iOS 14.4.2; en_US) Cronet']
+                downloaded_path = dest
+
+            # Method 1: yt-dlp with residential proxy (most reliable)
+            if not downloaded_path and proxy:
+                add_log(job_id, f'   🔄 Downloading via proxy...')
+                out_tmpl = f'{raw_dir}/{v["id"]}.%(ext)s'
+                cmd = [
+                    'yt-dlp',
+                    '--format', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best',
+                    '--merge-output-format', 'mp4',
+                    '--output', out_tmpl,
+                    '--no-playlist', '--no-warnings',
+                    '--proxy', proxy,
+                    '--socket-timeout', '30',
+                    '--retries', '3',
+                    '--fragment-retries', '3',
+                    '--extractor-args', 'youtube:player_client=web,web_creator',
+                    '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                ]
+                if cookies_file:
+                    cmd += ['--cookies', cookies_file]
                 cmd.append(v['url'])
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                if result.returncode != 0:
-                    add_log(job_id, f'      yt-dlp error: {result.stderr[-300:] if result.stderr else "no error"}')
+                found = glob.glob(f'{raw_dir}/{v["id"]}*.mp4')
+                if found:
+                    downloaded_path = found[0]
+                    size = os.path.getsize(downloaded_path) / (1024*1024)
+                    add_log(job_id, f'   ✅ Downloaded via proxy ({size:.1f}MB)')
+                else:
+                    err = result.stderr[-200:] if result.stderr else 'no output'
+                    add_log(job_id, f'   ⚠️ Proxy download failed: {err[-100:]}')
+
+            # Method 2: cobalt.tools
+            if not downloaded_path:
+                add_log(job_id, f'   🔄 Trying cobalt.tools...')
+                downloaded_path = download_via_cobalt(v['url'], raw_dir, v['id'], job_id)
+                if downloaded_path:
+                    size = os.path.getsize(downloaded_path) / (1024*1024)
+                    add_log(job_id, f'   ✅ Downloaded via cobalt ({size:.1f}MB)')
+
+            # Method 3: yt-dlp without proxy as last resort
+            if not downloaded_path:
+                add_log(job_id, f'   🔄 Trying direct download...')
+                out_tmpl = f'{raw_dir}/{v["id"]}.%(ext)s'
+                cmd = [
+                    'yt-dlp',
+                    '--format', 'best',
+                    '--merge-output-format', 'mp4',
+                    '--output', out_tmpl,
+                    '--no-playlist', '--no-warnings',
+                    '--extractor-args', 'youtube:player_client=web',
+                ]
+                if cookies_file:
+                    cmd += ['--cookies', cookies_file]
+                cmd.append(v['url'])
+                subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                found = glob.glob(f'{raw_dir}/{v["id"]}*.mp4')
+                if found:
+                    downloaded_path = found[0]
+                    size = os.path.getsize(downloaded_path) / (1024*1024)
+                    add_log(job_id, f'   ✅ Downloaded direct ({size:.1f}MB)')
+                else:
+                    add_log(job_id, f'   ❌ All download methods failed')
 
         downloaded = glob.glob(f'{raw_dir}/*.mp4')
         add_log(job_id, f'✅ Downloaded {len(downloaded)} file(s)')
         if not downloaded:
-            raise Exception('No videos downloaded')
+            raise Exception('No videos downloaded — check PROXY_URL environment variable')
 
         all_clips     = []
         clip_metadata = []

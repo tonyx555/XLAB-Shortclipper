@@ -1228,6 +1228,44 @@ def upload_video():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+def search_via_invidious(query, max_results=5):
+    import requests as req
+    instances = [
+        'https://invidious.snopyta.org',
+        'https://y.com.sb',
+        'https://invidious.kavin.rocks',
+        'https://vid.puffyan.us',
+    ]
+    for instance in instances:
+        try:
+            r = req.get(f'{instance}/api/v1/search',
+                params={'q': query, 'type': 'video', 'page': 1},
+                timeout=15)
+            if r.status_code != 200: continue
+            results = r.json()
+            videos = []
+            for v in results[:max_results]:
+                if v.get('type') != 'video': continue
+                vid_id = v.get('videoId','')
+                if not vid_id: continue
+                videos.append({
+                    'id': vid_id,
+                    'title': v.get('title','Unknown')[:60],
+                    'duration': v.get('lengthSeconds', 0),
+                    'channel': v.get('author','Unknown'),
+                    'thumbnail': f'https://img.youtube.com/vi/{vid_id}/hqdefault.jpg',
+                    'url': f'https://youtube.com/watch?v={vid_id}',
+                    'platform': 'youtube',
+                    'view_count': v.get('viewCount', 0) or 0
+                })
+            if videos:
+                return videos
+        except Exception as e:
+            logger.error(f'Invidious search error: {e}')
+            continue
+    return []
+
+
 @app.route('/api/search', methods=['POST'])
 def search():
     data = request.json

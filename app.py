@@ -314,12 +314,13 @@ def download_via_cobalt(url, output_dir, video_id, job_id):
             'filenameStyle': 'basic',
         }
         r = req.post('https://api.cobalt.tools/', json=payload, headers=headers, timeout=30)
+        logger.info(f'Cobalt response: {r.status_code} {r.text[:500]}')
         data = r.json()
+        logger.info(f'Cobalt data: {data}')
         
         if data.get('status') in ['stream', 'redirect', 'tunnel']:
             download_url = data.get('url')
             if download_url:
-                # Download the actual file
                 output_path = os.path.join(output_dir, f'{video_id}.mp4')
                 r2 = req.get(download_url, stream=True, timeout=300)
                 with open(output_path, 'wb') as f:
@@ -327,9 +328,13 @@ def download_via_cobalt(url, output_dir, video_id, job_id):
                         f.write(chunk)
                 if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
                     return output_path
+                else:
+                    logger.info(f'Cobalt file too small or missing')
+        else:
+            logger.info(f'Cobalt bad status: {data.get("status")} error: {data.get("error")}')
         return None
     except Exception as e:
-        logger.error(f'Cobalt error: {e}')
+        logger.error(f'Cobalt exception: {e}')
         return None
 
 def process_job(job_id, params):
@@ -381,11 +386,13 @@ def process_job(job_id, params):
             add_log(job_id, f'   ⬇️  {v["title"][:50]}...')
             
             # Try cobalt.tools first (handles YouTube PO token)
+            add_log(job_id, f'   🔄 Trying cobalt.tools...')
             downloaded_path = download_via_cobalt(v['url'], raw_dir, v['id'], job_id)
             
             if downloaded_path:
                 add_log(job_id, f'   ✅ Downloaded via cobalt')
             else:
+                add_log(job_id, f'   ⚠️ Cobalt failed — check Railway logs for details')
                 # Fallback to yt-dlp
                 add_log(job_id, f'   ↩️  Trying yt-dlp fallback...')
                 proxy = os.environ.get('PROXY_URL', '')

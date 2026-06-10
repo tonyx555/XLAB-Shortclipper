@@ -741,6 +741,113 @@ def upload_to_youtube(video_path, title, description, hashtags, access_token):
 # Background job processor
 # ============================================================
 
+def download_via_piped(video_url, output_dir, video_id):
+    """Download via Piped API - free, no account needed."""
+    import requests as req
+    piped_instances = [
+        'https://pipedapi.kavin.rocks',
+        'https://piped-api.garudalinux.org',
+        'https://api.piped.projectsegfault.net',
+        'https://pipedapi.tokhmi.xyz',
+    ]
+    # Extract video ID
+    vid_id = video_id
+    if 'youtube.com' in video_url or 'youtu.be' in video_url:
+        import re
+        m = re.search(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})', video_url)
+        if m: vid_id = m.group(1)
+
+    for instance in piped_instances:
+        try:
+            r = req.get(f'{instance}/streams/{vid_id}', timeout=15)
+            if r.status_code != 200: continue
+            data = r.json()
+            # Get best video stream
+            streams = data.get('videoStreams', [])
+            # Prefer 1080p, fallback to 720p, then best available
+            best = None
+            for quality in ['1080', '720', '480', '360']:
+                for s in streams:
+                    if quality in str(s.get('quality','')) and s.get('mimeType','').startswith('video'):
+                        best = s
+                        break
+                if best: break
+            if not best and streams:
+                best = streams[0]
+            if not best: continue
+
+            stream_url = best.get('url')
+            if not stream_url: continue
+
+            # Download the stream
+            output_path = os.path.join(output_dir, f'{video_id}.mp4')
+            r2 = req.get(stream_url, stream=True, timeout=300,
+                        headers={'User-Agent': 'Mozilla/5.0'})
+            with open(output_path, 'wb') as f:
+                for chunk in r2.iter_content(chunk_size=65536):
+                    f.write(chunk)
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
+                return output_path
+        except Exception as e:
+            logger.error(f'Piped {instance} error: {e}')
+            continue
+    return None
+
+
+def download_via_invidious(video_url, output_dir, video_id):
+    """Download via Invidious - free, no account needed."""
+    import requests as req
+    invidious_instances = [
+        'https://invidious.snopyta.org',
+        'https://y.com.sb',
+        'https://invidious.kavin.rocks',
+        'https://vid.puffyan.us',
+        'https://invidious.tiekoetter.com',
+    ]
+    vid_id = video_id
+    if 'youtube.com' in video_url or 'youtu.be' in video_url:
+        import re
+        m = re.search(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})', video_url)
+        if m: vid_id = m.group(1)
+
+    for instance in invidious_instances:
+        try:
+            r = req.get(f'{instance}/api/v1/videos/{vid_id}', timeout=15)
+            if r.status_code != 200: continue
+            data = r.json()
+            formats = data.get('formatStreams', []) + data.get('adaptiveFormats', [])
+            # Find best mp4
+            best = None
+            for quality in ['1080', '720', '480', '360']:
+                for f in formats:
+                    if quality in str(f.get('qualityLabel','')) and f.get('type','').startswith('video/mp4'):
+                        best = f
+                        break
+                if best: break
+            if not best:
+                for f in formats:
+                    if f.get('type','').startswith('video/mp4'):
+                        best = f
+                        break
+            if not best: continue
+
+            stream_url = best.get('url')
+            if not stream_url: continue
+
+            output_path = os.path.join(output_dir, f'{video_id}.mp4')
+            r2 = req.get(stream_url, stream=True, timeout=300,
+                        headers={'User-Agent': 'Mozilla/5.0'})
+            with open(output_path, 'wb') as f:
+                for chunk in r2.iter_content(chunk_size=65536):
+                    f.write(chunk)
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
+                return output_path
+        except Exception as e:
+            logger.error(f'Invidious {instance} error: {e}')
+            continue
+    return None
+
+
 def download_via_cobalt(url, output_dir, video_id, job_id):
     """Try to download video using cobalt.tools API."""
     import requests as req
@@ -933,13 +1040,28 @@ def process_job(job_id, params):
                     size = os.path.getsize(downloaded_path) / (1024*1024)
                     add_log(job_id, f'   ✅ Downloaded via cobalt ({size:.1f}MB)')
 
-            # Method 3: yt-dlp without proxy as last resort
+            # Method 3: Piped API (free, no account)
+            if not downloaded_path:
+                add_log(job_id, f'   🔄 Trying Piped API...')
+                downloaded_path = download_via_piped(v['url'], raw_dir, v['id'])
+                if downloaded_path:
+                    size = os.path.getsize(downloaded_path) / (1024*1024)
+                    add_log(job_id, f'   ✅ Downloaded via Piped ({size:.1f}MB)')
+
+            # Method 4: Invidious (free, no account)
+            if not downloaded_path:
+                add_log(job_id, f'   🔄 Trying Invidious...')
+                downloaded_path = download_via_invidious(v['url'], raw_dir, v['id'])
+                if downloaded_path:
+                    size = os.path.getsize(downloaded_path) / (1024*1024)
+                    add_log(job_id, f'   ✅ Downloaded via Invidious ({size:.1f}MB)')
+
+            # Method 5: yt-dlp direct last resort
             if not downloaded_path:
                 add_log(job_id, f'   🔄 Trying direct download...')
                 out_tmpl = f'{raw_dir}/{v["id"]}.%(ext)s'
                 cmd = [
-                    'yt-dlp',
-                    '--format', 'best',
+                    'yt-dlp', '--format', 'best',
                     '--merge-output-format', 'mp4',
                     '--output', out_tmpl,
                     '--no-playlist', '--no-warnings',
@@ -955,7 +1077,7 @@ def process_job(job_id, params):
                     size = os.path.getsize(downloaded_path) / (1024*1024)
                     add_log(job_id, f'   ✅ Downloaded direct ({size:.1f}MB)')
                 else:
-                    add_log(job_id, f'   ❌ All download methods failed')
+                    add_log(job_id, f'   ❌ All 5 download methods failed — skipping')
 
         downloaded = glob.glob(f'{raw_dir}/*.mp4')
         add_log(job_id, f'✅ Downloaded {len(downloaded)} file(s)')

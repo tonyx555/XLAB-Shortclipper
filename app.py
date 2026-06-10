@@ -328,7 +328,7 @@ def process_job(job_id, params):
             add_log(job_id, f'   ⬇️  {v["title"][:50]}...')
             proxy = os.environ.get('PROXY_URL', '')
             cmd = ['yt-dlp',
-                   '--format', 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
+                   '--format', 'best',
                    '--merge-output-format', 'mp4',
                    '--output', f'{raw_dir}/%(id)s_%(title).40s.%(ext)s',
                    '--no-playlist', '--no-warnings',

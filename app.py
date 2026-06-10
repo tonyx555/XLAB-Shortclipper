@@ -322,6 +322,14 @@ def process_job(job_id, params):
         auto_upload = params.get('auto_upload') == 'Yes'
         yt_token    = params.get('yt_access_token', '')
 
+        # Write cookies file if available
+        cookies_file = None
+        yt_cookies = os.environ.get('YT_COOKIES', '')
+        if yt_cookies:
+            cookies_file = f'{work_dir}/cookies.txt'
+            with open(cookies_file, 'w') as cf:
+                cf.write(yt_cookies)
+
         add_log(job_id, f'📥 Downloading {len(selected_videos)} video(s)...')
 
         for v in selected_videos:
@@ -337,7 +345,7 @@ def process_job(job_id, params):
                    '--sleep-interval', '2',
                    '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                    '--extractor-args', 'youtube:player_client=web',
-                   ] + (['--proxy', proxy] if proxy else [])
+                   ] + (['--proxy', proxy] if proxy else []) + (['--cookies', cookies_file] if cookies_file else [])
             if v.get('platform') == 'instagram':
                 cmd += ['--add-header', 'User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)']
             elif v.get('platform') == 'tiktok':

@@ -413,7 +413,26 @@ def process_job(job_id, params):
             add_log(job_id, f'Available formats: {debug_result.stdout[:1000]}')
             add_log(job_id, f'Format errors: {debug_result.stderr[:500]}')
 
-        add_log(job_id, f'📥 Downloading {len(selected_videos)} video(s)...')
+        # Wait for browser uploads if needed
+        max_wait = 300
+        waited = 0
+        while not get_job(job_id).get('uploads_ready', True) and waited < max_wait:
+            time.sleep(2)
+            waited += 2
+            if waited % 10 == 0:
+                add_log(job_id, f'⏳ Waiting for browser uploads... ({waited}s)')
+
+        # Check for browser-uploaded videos
+        upload_dir = f'/tmp/uploads/{job_id}'
+        browser_uploads = {}
+        if os.path.exists(upload_dir):
+            for fname in os.listdir(upload_dir):
+                if fname.endswith('.mp4'):
+                    vid_id = fname.replace('.mp4', '')
+                    browser_uploads[vid_id] = os.path.join(upload_dir, fname)
+        add_log(job_id, f'📱 Browser uploads found: {len(browser_uploads)}')
+
+        add_log(job_id, f'📥 Processing {len(selected_videos)} video(s)...')
 
         for v in selected_videos:
             add_log(job_id, f'   ⬇️  {v["title"][:50]}...')

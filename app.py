@@ -76,7 +76,12 @@ def run_scheduled_jobs():
                         'schedule_name': schedule.get('name', '')
                     }
                     SCHEDULES[sid].setdefault('job_history', []).append(job_id)
-                    t2 = threading.Thread(target=process_job, args=(job_id, params), daemon=True)
+                    # Use AI content pipeline if mode is ai_content
+                    if schedule.get('mode') == 'ai_content':
+                        ai_params = {**params, 'topic': schedule.get('query', '')}
+                        t2 = threading.Thread(target=process_ai_content_job, args=(job_id, ai_params), daemon=True)
+                    else:
+                        t2 = threading.Thread(target=process_job, args=(job_id, params), daemon=True)
                     t2.start()
         except Exception as e:
             logger.error(f'Scheduler error: {e}')

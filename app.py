@@ -299,6 +299,39 @@ def upload_to_youtube(video_path, title, description, hashtags, access_token):
 # ============================================================
 # Background job processor
 # ============================================================
+
+def download_via_cobalt(url, output_dir, video_id, job_id):
+    """Try to download video using cobalt.tools API."""
+    try:
+        import requests as req
+        headers = {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+        }
+        payload = {
+            'url': url,
+            'videoQuality': '720',
+            'filenameStyle': 'basic',
+        }
+        r = req.post('https://api.cobalt.tools/', json=payload, headers=headers, timeout=30)
+        data = r.json()
+        
+        if data.get('status') in ['stream', 'redirect', 'tunnel']:
+            download_url = data.get('url')
+            if download_url:
+                # Download the actual file
+                output_path = os.path.join(output_dir, f'{video_id}.mp4')
+                r2 = req.get(download_url, stream=True, timeout=300)
+                with open(output_path, 'wb') as f:
+                    for chunk in r2.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+                    return output_path
+        return None
+    except Exception as e:
+        logger.error(f'Cobalt error: {e}')
+        return None
+
 def process_job(job_id, params):
     work_dir = f'/tmp/job_{job_id}'
     raw_dir  = f'{work_dir}/raw'
@@ -346,27 +379,32 @@ def process_job(job_id, params):
 
         for v in selected_videos:
             add_log(job_id, f'   ⬇️  {v["title"][:50]}...')
-            proxy = os.environ.get('PROXY_URL', '')
-            cmd = ['yt-dlp',
-                   '--format', 'best',
-                   '--merge-output-format', 'mp4',
-                   '--output', f'{raw_dir}/%(id)s_%(title).40s.%(ext)s',
-                   '--no-playlist', '--no-warnings',
-                   '--no-check-certificates',
-                   '--extractor-retries', '3',
-                   '--sleep-interval', '2',
-                   '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                   '--extractor-args', 'youtube:player_client=web',
-                   ] + (['--proxy', proxy] if proxy else []) + (['--cookies', cookies_file] if cookies_file else [])
-            if v.get('platform') == 'instagram':
-                cmd += ['--add-header', 'User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)']
-            elif v.get('platform') == 'tiktok':
-                cmd += ['--add-header', 'User-Agent:TikTok 26.2.0 rv:262018 (iPhone; iOS 14.4.2; en_US) Cronet']
-            cmd.append(v['url'])
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            if result.returncode != 0:
-                add_log(job_id, f'      yt-dlp error: {result.stderr[-500:] if result.stderr else "no error output"}')
-                add_log(job_id, f'      stdout: {result.stdout[-300:] if result.stdout else "empty"}')
+            
+            # Try cobalt.tools first (handles YouTube PO token)
+            downloaded_path = download_via_cobalt(v['url'], raw_dir, v['id'], job_id)
+            
+            if downloaded_path:
+                add_log(job_id, f'   ✅ Downloaded via cobalt')
+            else:
+                # Fallback to yt-dlp
+                add_log(job_id, f'   ↩️  Trying yt-dlp fallback...')
+                proxy = os.environ.get('PROXY_URL', '')
+                cmd = ['yt-dlp',
+                       '--format', 'best',
+                       '--merge-output-format', 'mp4',
+                       '--output', f'{raw_dir}/%(id)s_%(title).40s.%(ext)s',
+                       '--no-playlist', '--no-warnings',
+                       '--no-check-certificates',
+                       '--extractor-args', 'youtube:player_client=web',
+                       ] + (['--proxy', proxy] if proxy else []) + (['--cookies', cookies_file] if cookies_file else [])
+                if v.get('platform') == 'instagram':
+                    cmd += ['--add-header', 'User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)']
+                elif v.get('platform') == 'tiktok':
+                    cmd += ['--add-header', 'User-Agent:TikTok 26.2.0 rv:262018 (iPhone; iOS 14.4.2; en_US) Cronet']
+                cmd.append(v['url'])
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                if result.returncode != 0:
+                    add_log(job_id, f'      yt-dlp error: {result.stderr[-300:] if result.stderr else "no error"}')
 
         downloaded = glob.glob(f'{raw_dir}/*.mp4')
         add_log(job_id, f'✅ Downloaded {len(downloaded)} file(s)')

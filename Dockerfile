@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     git \
     wget \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -18,4 +19,4 @@ COPY app.py .
 COPY templates/ templates/
 
 ENV PORT=8080
-CMD ["python", "app.py"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "0", "app:app"]

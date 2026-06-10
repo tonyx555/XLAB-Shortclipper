@@ -1229,20 +1229,77 @@ def upload_video():
         return jsonify({'error': str(e)}), 500
 
 def search_via_invidious(query, max_results=5):
+    """Search YouTube via proxy-routed yt-dlp with multiple fallback methods."""
     import requests as req
+    proxy = os.environ.get('PROXY_URL', '')
+    proxies = {'http': proxy, 'https': proxy} if proxy else {}
+
+    # Method 1: YouTube search page scrape via proxy
+    if proxy:
+        try:
+            r = req.get('https://www.youtube.com/results',
+                params={'search_query': query, 'sp': 'EgIQAQ%3D%3D'},
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept': 'text/html,application/xhtml+xml',
+                },
+                proxies=proxies, timeout=20)
+            if r.status_code == 200:
+                import re
+                # Extract video IDs and titles from YouTube search page
+                ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', r.text)
+                titles = re.findall(r'"title":{"runs":\[{"text":"([^"]+)"', r.text)
+                channels = re.findall(r'"ownerText":{"runs":\[{"text":"([^"]+)"', r.text)
+                durations = re.findall(r'"lengthText":{"accessibility":.*?"simpleText":"([^"]+)"', r.text)
+                
+                seen = set()
+                videos = []
+                for i, vid_id in enumerate(ids):
+                    if vid_id in seen: continue
+                    seen.add(vid_id)
+                    dur_str = durations[i] if i < len(durations) else '0:00'
+                    # Parse duration string like "10:24" to seconds
+                    try:
+                        parts = dur_str.split(':')
+                        dur_secs = int(parts[-1]) + int(parts[-2])*60 + (int(parts[-3])*3600 if len(parts)>2 else 0)
+                    except:
+                        dur_secs = 0
+                    videos.append({
+                        'id': vid_id,
+                        'title': (titles[i] if i < len(titles) else query)[:60],
+                        'duration': dur_secs,
+                        'channel': channels[i] if i < len(channels) else 'Unknown',
+                        'thumbnail': f'https://img.youtube.com/vi/{vid_id}/hqdefault.jpg',
+                        'url': f'https://youtube.com/watch?v={vid_id}',
+                        'platform': 'youtube',
+                        'view_count': 0
+                    })
+                    if len(videos) >= max_results:
+                        break
+                if videos:
+                    logger.info(f'YouTube proxy search found {len(videos)} results')
+                    return videos
+        except Exception as e:
+            logger.error(f'YouTube proxy search error: {e}')
+
+    # Method 2: Invidious instances via proxy
     instances = [
         'https://invidious.snopyta.org',
         'https://y.com.sb',
         'https://invidious.kavin.rocks',
         'https://vid.puffyan.us',
+        'https://inv.tux.pizza',
+        'https://invidious.nerdvpn.de',
     ]
     for instance in instances:
         try:
             r = req.get(f'{instance}/api/v1/search',
                 params={'q': query, 'type': 'video', 'page': 1},
-                timeout=15)
+                proxies=proxies, timeout=15)
             if r.status_code != 200: continue
             results = r.json()
+            if not isinstance(results, list): continue
             videos = []
             for v in results[:max_results]:
                 if v.get('type') != 'video': continue
@@ -1259,9 +1316,10 @@ def search_via_invidious(query, max_results=5):
                     'view_count': v.get('viewCount', 0) or 0
                 })
             if videos:
+                logger.info(f'Invidious search found {len(videos)} results from {instance}')
                 return videos
         except Exception as e:
-            logger.error(f'Invidious search error: {e}')
+            logger.error(f'Invidious {instance} error: {e}')
             continue
     return []
 

@@ -1009,33 +1009,25 @@ def process_job(job_id, params):
                 add_log(job_id, f'   🔄 Downloading via proxy...')
                 out_tmpl = f'{raw_dir}/{v["id"]}.%(ext)s'
 
-                # Use format selected by user, or auto-detect best
-                selected_fmt = v.get('selected_format', 'best')
-                if not selected_fmt or selected_fmt == 'best':
-                    # Auto detect — list formats and pick best mp4
-                    fmt_cmd = ['yt-dlp', '--list-formats', '--no-warnings',
-                               '--proxy', proxy,
-                               '--extractor-args', 'youtube:player_client=web',
-                               v['url']]
-                    fmt_result = subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30)
-                    fmt_output = fmt_result.stdout or ''
-                    if '1080' in fmt_output: selected_fmt = 'bestvideo[height<=1080]+bestaudio/best'
-                    elif '720' in fmt_output: selected_fmt = 'bestvideo[height<=720]+bestaudio/best'
-                    else: selected_fmt = 'best'
-
-                add_log(job_id, f'   📋 Format: {selected_fmt.split("/")[0][:40]}')
-
+                # Quality cascade — tries best quality, audio optional
+                fmt = (
+                    'bestvideo[height<=1080]+bestaudio/bestvideo[height<=1080]'
+                    '/bestvideo[height<=720]+bestaudio/bestvideo[height<=720]'
+                    '/bestvideo[height<=480]+bestaudio/bestvideo[height<=480]'
+                    '/bestvideo+bestaudio/bestvideo'
+                )
+                add_log(job_id, f'   📋 Requesting best quality (1080p → 720p → 480p fallback)...')
                 cmd = [
                     'yt-dlp',
-                    '--format', selected_fmt,
+                    '--format', fmt,
                     '--merge-output-format', 'mp4',
                     '--output', out_tmpl,
                     '--no-playlist', '--no-warnings',
                     '--proxy', proxy,
                     '--socket-timeout', '30',
                     '--retries', '3',
-                    '--extractor-args', 'youtube:player_client=web',
-                    '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    '--extractor-args', 'youtube:player_client=web,web_safari',
+                    '--add-header', 'User-Agent:Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
                 ]
                 if cookies_file:
                     cmd += ['--cookies', cookies_file]

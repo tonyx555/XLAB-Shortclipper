@@ -425,6 +425,58 @@ Respond ONLY with valid JSON, no markdown:
         return None
 
 
+def post_to_x(video_path, text, api_key, api_secret, access_token, access_token_secret):
+    """Post video to X (Twitter) using tweepy — free tier supports 1500 posts/month."""
+    try:
+        import tweepy
+
+        # OAuth1 for media upload (v1.1 endpoint)
+        auth = tweepy.OAuth1UserHandler(api_key, api_secret, access_token, access_token_secret)
+        api_v1 = tweepy.API(auth)
+
+        # Upload video
+        if video_path and os.path.exists(video_path):
+            media = api_v1.media_upload(
+                filename=video_path,
+                media_category='tweet_video',
+                chunked=True
+            )
+            media_id = media.media_id_string
+            # Wait for video processing
+            for _ in range(30):
+                status = api_v1.get_media_upload_status(media_id)
+                if status.processing_info.get('state') == 'succeeded':
+                    break
+                elif status.processing_info.get('state') == 'failed':
+                    logger.error('X video processing failed')
+                    media_id = None
+                    break
+                time.sleep(5)
+        else:
+            media_id = None
+
+        # Post tweet with OAuth2 client
+        client = tweepy.Client(
+            consumer_key=api_key,
+            consumer_secret=api_secret,
+            access_token=access_token,
+            access_token_secret=access_token_secret
+        )
+
+        tweet_params = {'text': text[:280]}
+        if media_id:
+            tweet_params['media_ids'] = [media_id]
+
+        response = client.create_tweet(**tweet_params)
+        tweet_id = response.data['id']
+        logger.info(f'Posted to X: https://x.com/i/web/status/{tweet_id}')
+        return tweet_id
+
+    except Exception as e:
+        logger.error(f'X post error: {e}')
+        return None
+
+
 def call_grok(prompt, api_key):
     """Call Grok API for text generation."""
     import requests as req
@@ -690,7 +742,20 @@ def process_ai_news_studio(job_id, params):
                 yt_id = upload_to_youtube(final_path, item['title'], desc,
                                          item.get('hashtags',['#AI','#Shorts']), yt_token)
                 if yt_id:
-                    add_log(job_id, f'   ✅ Live: https://youtube.com/shorts/{yt_id}')
+                    add_log(job_id, f'   ✅ YouTube: https://youtube.com/shorts/{yt_id}')
+
+            # Post to X
+            x_key = os.environ.get('X_API_KEY','')
+            x_secret = os.environ.get('X_API_SECRET','')
+            x_token = os.environ.get('X_ACCESS_TOKEN','')
+            x_token_secret = os.environ.get('X_ACCESS_TOKEN_SECRET','')
+            if x_key and x_secret and x_token and x_token_secret:
+                add_log(job_id, f'   🐦 Posting to X...')
+                yt_link = f'\nhttps://youtube.com/shorts/{yt_id}' if yt_id else ''
+                x_text = f'{item["title"]}\n\n{item.get("hook","")}\n{" ".join(item.get("hashtags",["#AI"])[:4])}{yt_link}\n\nMade with XLAB'
+                x_id = post_to_x(final_path, x_text, x_key, x_secret, x_token, x_token_secret)
+                if x_id:
+                    add_log(job_id, f'   ✅ X: https://x.com/i/web/status/{x_id}')
 
             produced_videos.append({
                 'path': final_path,
@@ -1252,35 +1317,47 @@ def download_via_rapidapi(video_url, output_dir, video_id):
         if not os.path.exists(temp_path) or os.path.getsize(temp_path) < 100000:
             return None
 
-        # Remux to proper MP4 — try multiple methods
+        # Check what ffmpeg thinks the file is
+        probe = subprocess.run([
+            'ffmpeg', '-i', temp_path
+        ], capture_output=True, text=True, timeout=30)
+        probe_output = probe.stderr[:500]
+        logger.info(f'RapidAPI file probe: {probe_output[:200]}')
+
+        # Detect if it's a valid video
+        is_valid = any(x in probe_output for x in ['Video:', 'Audio:', 'Duration:'])
+        size_mb = os.path.getsize(temp_path) / (1024*1024)
+        logger.info(f'File valid: {is_valid}, size: {size_mb:.1f}MB')
+
         remuxed = False
 
-        # Method 1: Simple copy remux
-        result = subprocess.run([
-            'ffmpeg', '-i', temp_path,
-            '-c', 'copy', '-y', output_path,
-            '-loglevel', 'quiet'
-        ], capture_output=True, timeout=120)
-
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
-            remuxed = True
-        else:
-            # Method 2: Re-encode to fix corrupted container
-            result2 = subprocess.run([
+        if is_valid:
+            # Method 1: Simple copy remux
+            result = subprocess.run([
                 'ffmpeg', '-i', temp_path,
-                '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-                '-c:a', 'aac', '-b:a', '128k',
+                '-c', 'copy', '-movflags', '+faststart',
                 '-y', output_path, '-loglevel', 'quiet'
-            ], capture_output=True, timeout=300)
+            ], capture_output=True, timeout=120)
 
             if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
                 remuxed = True
             else:
-                # Method 3: Use the temp file directly as-is
-                import shutil
-                shutil.copy2(temp_path, output_path)
+                # Method 2: Re-encode
+                result2 = subprocess.run([
+                    'ffmpeg', '-i', temp_path,
+                    '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+                    '-c:a', 'aac', '-b:a', '128k',
+                    '-y', output_path, '-loglevel', 'quiet'
+                ], capture_output=True, timeout=300)
                 if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
                     remuxed = True
+        else:
+            logger.error(f'RapidAPI returned invalid file: {probe_output[:100]}')
+            # Try using file directly — maybe ffmpeg is wrong
+            import shutil
+            shutil.copy2(temp_path, output_path)
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
+                remuxed = True
 
         # Clean up temp
         if os.path.exists(temp_path):

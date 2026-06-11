@@ -743,6 +743,86 @@ def upload_to_youtube(video_path, title, description, hashtags, access_token):
 # Background job processor
 # ============================================================
 
+def download_via_rapidapi(video_url, output_dir, video_id):
+    """Download via YouTube Media Downloader RapidAPI - most reliable."""
+    import requests as req
+    import re
+
+    api_key = os.environ.get('RAPIDAPI_KEY', '')
+    if not api_key:
+        return None
+
+    # Extract video ID
+    vid_id = video_id
+    m = re.search(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})', video_url)
+    if m:
+        vid_id = m.group(1)
+
+    headers = {
+        'x-rapidapi-key': api_key,
+        'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com',
+        'Content-Type': 'application/json'
+    }
+
+    try:
+        # Step 1: Get video details and download URLs
+        r = req.get(
+            'https://youtube-media-downloader.p.rapidapi.com/v2/video/details',
+            params={'videoId': vid_id},
+            headers=headers,
+            timeout=15
+        )
+        if r.status_code != 200:
+            logger.error(f'RapidAPI details error: {r.status_code} {r.text[:100]}')
+            return None
+
+        data = r.json()
+        if data.get('errorId') != 'Success':
+            logger.error(f'RapidAPI error: {data.get("errorId")}')
+            return None
+
+        # Get best video stream
+        videos = data.get('videos', {}).get('items', [])
+        if not videos:
+            # Try alternative response structure
+            videos = data.get('streamingData', {}).get('formats', [])
+
+        # Pick best quality MP4
+        best_url = None
+        best_quality = 0
+        for v in videos:
+            url = v.get('url') or v.get('file')
+            quality = v.get('height', 0) or v.get('quality', 0)
+            ext = v.get('extension', '') or v.get('mimeType', '')
+            if url and 'mp4' in str(ext).lower() and quality > best_quality:
+                best_url = url
+                best_quality = quality
+
+        # Fallback - take first video url
+        if not best_url and videos:
+            best_url = videos[0].get('url') or videos[0].get('file')
+
+        if not best_url:
+            logger.error(f'RapidAPI: no video URL in response')
+            return None
+
+        # Step 2: Download the video
+        logger.info(f'RapidAPI: downloading {best_quality}p from {best_url[:60]}')
+        output_path = os.path.join(output_dir, f'{video_id}.mp4')
+        r2 = req.get(best_url, stream=True, timeout=300,
+                    headers={'User-Agent': 'Mozilla/5.0'})
+        with open(output_path, 'wb') as f:
+            for chunk in r2.iter_content(chunk_size=65536):
+                f.write(chunk)
+
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
+            return output_path
+
+    except Exception as e:
+        logger.error(f'RapidAPI download error: {e}')
+    return None
+
+
 def download_via_piped(video_url, output_dir, video_id):
     """Download via Piped API - free, no account needed."""
     import requests as req
@@ -998,7 +1078,17 @@ def process_job(job_id, params):
                 add_log(job_id, f'   ✅ Using browser upload')
                 downloaded_path = dest
 
-            # Method 1: yt-dlp with residential proxy (most reliable)
+            # Method 0: RapidAPI YouTube Media Downloader (most reliable, no IP issues)
+            if not downloaded_path:
+                rapidapi_key = os.environ.get('RAPIDAPI_KEY', '')
+                if rapidapi_key:
+                    add_log(job_id, f'   🚀 Downloading via RapidAPI...')
+                    downloaded_path = download_via_rapidapi(v['url'], raw_dir, v['id'])
+                    if downloaded_path:
+                        size = os.path.getsize(downloaded_path) / (1024*1024)
+                        add_log(job_id, f'   ✅ Downloaded via RapidAPI ({size:.1f}MB)')
+
+            # Method 1: yt-dlp with residential proxy
             if not downloaded_path and proxy:
                 add_log(job_id, f'   🔄 Downloading via proxy...')
                 out_tmpl = f'{raw_dir}/{v["id"]}.%(ext)s'

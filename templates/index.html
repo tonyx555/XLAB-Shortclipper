@@ -1,4 +1,4 @@
-<<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -614,6 +614,9 @@ select { cursor: pointer; }
 
     <!-- Dropdown menu -->
     <div id="navMenu" style="display:none;position:absolute;top:44px;right:0;background:#111;border:1px solid #1e1e1e;border-radius:14px;padding:8px;min-width:200px;z-index:200;box-shadow:0 8px 32px rgba(0,0,0,0.5)">
+      <button onclick="showView('channels');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#e8e8f0;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
+        <span style="color:#e63329;font-size:16px">📺</span> Channels
+      </button>
       <button onclick="showView('ai-content');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#e8e8f0;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
         <span style="color:#ff6b5b;font-size:16px">🎬</span> Content Studio
       </button>
@@ -1154,6 +1157,93 @@ select { cursor: pointer; }
   </div>
 
   <!-- ============================================================
+       VIEW: MULTI-CHANNEL
+       ============================================================ -->
+  <div class="view" id="view-channels">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 16px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button onclick="showView('source')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:0">←</button>
+        <div>
+          <div style="font-size:16px;font-weight:800;color:var(--white)">Channels</div>
+          <div style="font-size:11px;color:var(--muted)">Each channel posts automatically</div>
+        </div>
+      </div>
+      <button onclick="showAddChannel()" style="background:linear-gradient(135deg,#ff4438,#c42820);border:none;color:white;font-size:12px;font-weight:700;padding:7px 14px;border-radius:10px;cursor:pointer;font-family:var(--font)">+ Add</button>
+    </div>
+
+    <!-- Add Channel Form -->
+    <div id="addChannelForm" style="display:none">
+      <div class="card" style="margin-bottom:10px">
+        <div class="card-title">New Channel</div>
+        <div class="field">
+          <label class="field-label">Channel Name</label>
+          <input type="text" id="chName" placeholder="AI Tools Daily">
+        </div>
+        <div class="field">
+          <label class="field-label">Niche / Topic</label>
+          <input type="text" id="chNiche" placeholder="new AI tools and hacks">
+        </div>
+        <div class="field">
+          <label class="field-label">Content Mode</label>
+          <select id="chMode">
+            <option value="ai_news">📡 AI News — Grok finds X trends + Aurora</option>
+            <option value="studio">🎬 Content Studio — AI assembled clips</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label">Categories</label>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#aaa"><input type="checkbox" class="ch-cat" value="ai_tools" checked style="accent-color:#e63329"> AI Tools</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#aaa"><input type="checkbox" class="ch-cat" value="github_hacks" checked style="accent-color:#e63329"> GitHub Hacks</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#aaa"><input type="checkbox" class="ch-cat" value="hustles" style="accent-color:#e63329"> AI Hustles</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#aaa"><input type="checkbox" class="ch-cat" value="productivity" style="accent-color:#e63329"> Productivity</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#aaa"><input type="checkbox" class="ch-cat" value="tech_news" style="accent-color:#e63329"> Tech News</label>
+          </div>
+        </div>
+        <div class="row2" style="margin-top:10px">
+          <div class="field">
+            <label class="field-label">Post time</label>
+            <select id="chHour">
+              <option value="7">7:00 AM</option>
+              <option value="9" selected>9:00 AM</option>
+              <option value="12">12:00 PM</option>
+              <option value="18">6:00 PM</option>
+              <option value="20">8:00 PM</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label">Videos/day</label>
+            <select id="chMaxVideos">
+              <option value="1">1</option>
+              <option value="3" selected>3</option>
+              <option value="5">5</option>
+            </select>
+          </div>
+        </div>
+        <div class="field" style="margin-top:10px">
+          <label class="field-label">Voice</label>
+          <select id="chVoice">
+            <option value="ara">Ara — warm</option>
+            <option value="eve">Eve — clear</option>
+            <option value="leo">Leo — deep</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button onclick="saveChannel()" class="btn btn-red" style="flex:1;padding:12px">Create Channel</button>
+          <button onclick="document.getElementById('addChannelForm').style.display='none'" style="background:#111;border:1px solid #222;color:#666;padding:12px 16px;border-radius:12px;cursor:pointer;font-family:var(--font)">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Channel List -->
+    <div id="channelsList">
+      <p style="color:var(--muted);font-size:13px;padding:12px 0">No channels yet. Add one to start automating.</p>
+    </div>
+
+  </div>
+
+  <!-- ============================================================
        VIEW: AI NEWS STUDIO
        ============================================================ -->
   <div class="view" id="view-ainews">
@@ -1169,7 +1259,7 @@ select { cursor: pointer; }
     <div style="background:linear-gradient(135deg,rgba(34,197,94,0.08),rgba(16,185,129,0.05));border:1px solid rgba(34,197,94,0.15);border-radius:14px;padding:14px;margin-bottom:16px">
       <div style="font-size:11px;color:#6ee7b7;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">How it works</div>
       <div style="font-size:11px;color:#555;line-height:1.8">
-        Grok scans X for AI tools, GitHub hacks, hustles and tech news posted in the last 48hrs that aren't yet viral on YouTube/TikTok → creates and posts Shorts automatically
+        Grok scans X for AI news not yet on YouTube → Aurora generates original visuals → Grok narrates → posts automatically. <span style="color:#6ee7b7">100% original content. Always first.</span>
       </div>
     </div>
 
@@ -1202,8 +1292,7 @@ select { cursor: pointer; }
 
     <div class="card" style="margin-bottom:10px">
       <div class="card-title">Settings</div>
-      <div class="row2">
-        <div class="field">
+      <div class="field">
           <label class="field-label">Videos per run</label>
           <select id="newsMaxVideos">
             <option value="1">1 video</option>
@@ -1211,14 +1300,10 @@ select { cursor: pointer; }
             <option value="5">5 videos</option>
           </select>
         </div>
-        <div class="field">
-          <label class="field-label">Visuals</label>
-          <select id="newsVisuals">
-            <option value="Yes">Aurora AI generated</option>
-            <option value="No" selected>YouTube footage</option>
-          </select>
+        <div style="background:rgba(124,58,237,0.08);border:1px solid rgba(124,58,237,0.2);border-radius:8px;padding:8px 12px;margin-top:8px">
+          <div style="font-size:11px;color:#a78bfa;font-weight:700">✨ Always Aurora AI generated</div>
+          <div style="font-size:10px;color:#555;margin-top:2px">100% original content — no YouTube needed</div>
         </div>
-      </div>
       <div class="field" style="margin-top:10px">
         <label class="field-label">Music</label>
         <div class="pill-group">
@@ -2202,6 +2287,107 @@ document.addEventListener('click', (e) => {
   if (menu && btn && !menu.contains(e.target) && !btn.contains(e.target)) {
     menu.style.display = 'none';
   }
+});
+
+// ============================================================
+// Multi-Channel Manager
+// ============================================================
+function showAddChannel() {
+  const f = document.getElementById('addChannelForm');
+  f.style.display = f.style.display === 'none' ? 'block' : 'none';
+}
+
+async function saveChannel() {
+  const cats = [...document.querySelectorAll('.ch-cat:checked')].map(c => c.value);
+  const channel = {
+    name: document.getElementById('chName').value || 'My Channel',
+    niche: document.getElementById('chNiche').value || 'ai tools',
+    mode: document.getElementById('chMode').value,
+    categories: cats,
+    schedule_hour: parseInt(document.getElementById('chHour').value),
+    max_videos: parseInt(document.getElementById('chMaxVideos').value),
+    voice: document.getElementById('chVoice').value,
+    yt_token: getActiveToken() || '',
+  };
+  const r = await fetch('/api/channels', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(channel)
+  });
+  const data = await r.json();
+  if (data.id) {
+    document.getElementById('addChannelForm').style.display = 'none';
+    loadChannels();
+    alert(`✅ Channel "${channel.name}" created! Posts ${channel.max_videos} videos daily at ${channel.schedule_hour}:00`);
+  }
+}
+
+async function loadChannels() {
+  try {
+    const r = await fetch('/api/channels');
+    const channels = await r.json();
+    renderChannels(channels);
+  } catch(e) {}
+}
+
+function renderChannels(channels) {
+  const list = document.getElementById('channelsList');
+  if (!list) return;
+  if (!channels.length) {
+    list.innerHTML = '<p style="color:var(--muted);font-size:13px;padding:12px 0">No channels yet. Add one to start automating.</p>';
+    return;
+  }
+  const modeLabels = { ai_news: '📡 AI News', studio: '🎬 Studio', clips: '✂️ Clips' };
+  list.innerHTML = channels.map(c => `
+    <div class="card" style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:700;color:var(--white);margin-bottom:3px">${c.name}</div>
+          <div style="font-size:11px;color:var(--muted)">${c.niche}</div>
+          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+            <span style="background:#111;border:1px solid #222;color:#555;font-size:9px;padding:2px 7px;border-radius:4px">${modeLabels[c.mode]||c.mode}</span>
+            <span style="background:#111;border:1px solid #222;color:#555;font-size:9px;padding:2px 7px;border-radius:4px">Daily ${c.schedule_hour}:00</span>
+            <span style="background:#111;border:1px solid #222;color:#555;font-size:9px;padding:2px 7px;border-radius:4px">${c.max_videos} videos/day</span>
+            ${c.total_posted ? `<span style="background:#0d1f0d;border:1px solid #1a3a1a;color:#22c55e;font-size:9px;padding:2px 7px;border-radius:4px">${c.total_posted} posted</span>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;margin-left:10px">
+          <button onclick="runChannelNow('${c.id}')" style="background:rgba(230,51,41,0.1);border:1px solid rgba(230,51,41,0.3);color:#ff6b5b;font-size:10px;font-weight:700;padding:4px 10px;border-radius:6px;cursor:pointer;font-family:var(--font);white-space:nowrap">▶ Run now</button>
+          <button onclick="toggleChannel('${c.id}')" style="background:${c.active ? '#0d1f0d' : '#111'};color:${c.active ? '#22c55e' : '#555'};border:1px solid ${c.active ? '#1a3a1a' : '#222'};font-size:10px;font-weight:700;padding:4px 10px;border-radius:6px;cursor:pointer;font-family:var(--font)">
+            ${c.active ? '● Active' : '○ Paused'}
+          </button>
+          <button onclick="deleteChannel('${c.id}')" style="background:none;border:none;color:#333;font-size:10px;cursor:pointer;font-family:var(--font);padding:2px 6px">Delete</button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function runChannelNow(id) {
+  const r = await fetch(`/api/channels/${id}/run`, {method: 'POST'});
+  const data = await r.json();
+  if (data.job_id) {
+    currentJobId = data.job_id;
+    showView('job');
+    document.getElementById('jobTitle').textContent = 'Channel Running...';
+    document.getElementById('doneBlock').style.display = 'none';
+    startPolling();
+  }
+}
+
+async function toggleChannel(id) {
+  await fetch(`/api/channels/${id}/toggle`, {method: 'POST'});
+  loadChannels();
+}
+
+async function deleteChannel(id) {
+  if (!confirm('Delete this channel?')) return;
+  await fetch(`/api/channels/${id}`, {method: 'DELETE'});
+  loadChannels();
+}
+
+window.addEventListener('load', () => {
+  loadChannels();
 });
 
 // ============================================================

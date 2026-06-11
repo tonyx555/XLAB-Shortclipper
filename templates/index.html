@@ -610,6 +610,9 @@ select { cursor: pointer; }
   <div class="nav-logo">X<span>LAB</span></div>
   <div class="nav-right">
     <button onclick="showView('ai-content')" style="background:linear-gradient(135deg,rgba(230,51,41,0.2),rgba(100,50,255,0.15));border:1px solid rgba(230,51,41,0.3);color:#ff6b5b;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:1px;padding:6px 10px;border-radius:8px">STUDIO</button>
+    <button onclick="showView('ainews')" style="background:linear-gradient(135deg,rgba(34,197,94,0.15),rgba(16,185,129,0.1));border:1px solid rgba(34,197,94,0.25);color:#6ee7b7;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:0.5px;padding:6px 10px;border-radius:8px">📡</button>
+    <button onclick="showView('grok')" style="background:linear-gradient(135deg,rgba(124,58,237,0.2),rgba(79,70,229,0.15));border:1px solid rgba(124,58,237,0.3);color:#a78bfa;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:0.5px;padding:6px 10px;border-radius:8px">✨</button>
+    <button onclick="showView('history')" style="background:none;border:none;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;letter-spacing:0.5px;padding:6px 10px;border-radius:8px;border:1px solid var(--border)">📋</button>
     <button onclick="showView('schedule')" style="background:none;border:none;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;letter-spacing:0.5px;padding:6px 10px;border-radius:8px;border:1px solid var(--border)">⏰</button>
     <span class="nav-badge">Beta</span>
   </div>
@@ -885,8 +888,12 @@ select { cursor: pointer; }
         </div>
         <div id="aiFields" style="display:none">
           <div class="field">
-            <label class="field-label">Claude API Key</label>
-            <input type="password" id="claudeKey" placeholder="sk-ant-...">
+            <label class="field-label">Gemini API Key (free — aistudio.google.com)</label>
+            <input type="password" id="claudeKey" placeholder="AIza...">
+            <div style="margin-top:8px">
+            <label class="field-label">Grok API Key (free — console.x.ai)</label>
+            <input type="password" id="grokKey" placeholder="xai-...">
+            </div>
           </div>
           <div class="field">
             <label class="field-label">Content Topic</label>
@@ -1127,6 +1134,217 @@ select { cursor: pointer; }
     <button class="btn btn-red" onclick="generateAIContent()" id="aiContentBtn">
       Generate Video →
     </button>
+
+  </div>
+
+  <!-- ============================================================
+       VIEW: AI NEWS STUDIO
+       ============================================================ -->
+  <div class="view" id="view-ainews">
+
+    <div style="display:flex;align-items:center;gap:12px;margin:20px 0 16px">
+      <button onclick="showView('source')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:0">←</button>
+      <div>
+        <div style="font-size:16px;font-weight:800;color:var(--white)">AI News Studio</div>
+        <div style="font-size:11px;color:var(--muted)">Grok finds what's new on X → auto-posts Shorts</div>
+      </div>
+    </div>
+
+    <div style="background:linear-gradient(135deg,rgba(34,197,94,0.08),rgba(16,185,129,0.05));border:1px solid rgba(34,197,94,0.15);border-radius:14px;padding:14px;margin-bottom:16px">
+      <div style="font-size:11px;color:#6ee7b7;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">How it works</div>
+      <div style="font-size:11px;color:#555;line-height:1.8">
+        Grok scans X for AI tools, GitHub hacks, hustles and tech news posted in the last 48hrs that aren't yet viral on YouTube/TikTok → creates and posts Shorts automatically
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Content Categories</div>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:10px">Select what to cover:</p>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+          <input type="checkbox" id="cat_ai" checked style="accent-color:#e63329;width:16px;height:16px">
+          <div><div style="font-size:13px;font-weight:600;color:#e8e8f0">🤖 New AI Tools</div><div style="font-size:10px;color:#555">Latest models, apps, APIs just released</div></div>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+          <input type="checkbox" id="cat_github" checked style="accent-color:#e63329;width:16px;height:16px">
+          <div><div style="font-size:13px;font-weight:600;color:#e8e8f0">⚡ GitHub Hacks</div><div style="font-size:10px;color:#555">Clever repos, automations, scripts people find</div></div>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+          <input type="checkbox" id="cat_hustle" checked style="accent-color:#e63329;width:16px;height:16px">
+          <div><div style="font-size:13px;font-weight:600;color:#e8e8f0">💰 AI Hustles</div><div style="font-size:10px;color:#555">Ways to make money with AI, side income ideas</div></div>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+          <input type="checkbox" id="cat_productivity" checked style="accent-color:#e63329;width:16px;height:16px">
+          <div><div style="font-size:13px;font-weight:600;color:#e8e8f0">🚀 Productivity Hacks</div><div style="font-size:10px;color:#555">AI workflows, automations, time savers</div></div>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+          <input type="checkbox" id="cat_tech" style="accent-color:#e63329;width:16px;height:16px">
+          <div><div style="font-size:13px;font-weight:600;color:#e8e8f0">📡 Tech News</div><div style="font-size:10px;color:#555">Underreported tech stories before they go mainstream</div></div>
+        </label>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Settings</div>
+      <div class="row2">
+        <div class="field">
+          <label class="field-label">Videos per run</label>
+          <select id="newsMaxVideos">
+            <option value="1">1 video</option>
+            <option value="3" selected>3 videos</option>
+            <option value="5">5 videos</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label">Visuals</label>
+          <select id="newsVisuals">
+            <option value="Yes">Aurora AI generated</option>
+            <option value="No" selected>YouTube footage</option>
+          </select>
+        </div>
+      </div>
+      <div class="field" style="margin-top:10px">
+        <label class="field-label">Music</label>
+        <div class="pill-group">
+          <button class="pill active" id="newsMusicYes" onclick="setNewsToggle('music','Yes')">On</button>
+          <button class="pill" id="newsMusicNo" onclick="setNewsToggle('music','No')">Off</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Auto-post</div>
+      <div class="pill-group">
+        <button class="pill" id="newsUpYes" onclick="setNewsToggle('up','Yes')">Auto-post to YouTube</button>
+        <button class="pill active" id="newsUpNo" onclick="setNewsToggle('up','No')">Download only</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:24px">
+      <div class="collapse-trigger" onclick="toggleCollapse(this)">
+        <div class="ctitle"><span>⏰</span> Daily Auto Schedule</div>
+        <span class="collapse-arrow">▾</span>
+      </div>
+      <div class="collapse-body">
+        <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Run automatically every day — Grok finds fresh content and posts without you doing anything.</p>
+        <select id="newsSchHour" style="margin-bottom:10px">
+          <option value="7">7:00 AM</option>
+          <option value="9" selected>9:00 AM</option>
+          <option value="12">12:00 PM</option>
+          <option value="18">6:00 PM</option>
+        </select>
+        <button class="btn btn-ghost" onclick="scheduleAINews()" style="font-size:13px;padding:11px">Activate Daily Schedule</button>
+      </div>
+    </div>
+
+    <button class="btn btn-red" onclick="runAINews()" id="newsBtn">
+      Find & Create Now →
+    </button>
+
+  </div>
+
+  <!-- ============================================================
+       VIEW: GROK ORIGINALS
+       ============================================================ -->
+  <div class="view" id="view-grok">
+
+    <div style="display:flex;align-items:center;gap:12px;margin:20px 0 16px">
+      <button onclick="showView('source')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:0">←</button>
+      <div>
+        <div style="font-size:16px;font-weight:800;color:var(--white)">Grok Originals</div>
+        <div style="font-size:11px;color:var(--muted)">AI generates full video — no source needed</div>
+      </div>
+    </div>
+
+    <div style="background:linear-gradient(135deg,rgba(100,50,255,0.1),rgba(230,51,41,0.05));border:1px solid rgba(100,50,255,0.2);border-radius:14px;padding:16px;margin-bottom:16px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:11px;color:var(--dim);line-height:1.8">
+        <div><span style="color:#a78bfa;font-weight:700">01</span> Type any topic<br><span style="color:#a78bfa;font-weight:700">02</span> Grok writes script</div>
+        <div><span style="color:#a78bfa;font-weight:700">03</span> Aurora generates clips<br><span style="color:#a78bfa;font-weight:700">04</span> Posted to YouTube</div>
+      </div>
+      <div style="font-size:10px;color:#555;margin-top:8px">~$0.45 per 30s video · 3 x 10s AI clips</div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Topic</div>
+      <input type="text" id="grokTopic" placeholder="Top 10 goals that broke the internet">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+        <button onclick="document.getElementById('grokTopic').value='A football goal that defied gravity'" class="topic-chip">Football magic</button>
+        <button onclick="document.getElementById('grokTopic').value='The most beautiful sunset you've ever seen'" class="topic-chip">Cinematic nature</button>
+        <button onclick="document.getElementById('grokTopic').value='A futuristic city at night with flying cars'" class="topic-chip">Futuristic city</button>
+        <button onclick="document.getElementById('grokTopic').value='Ocean waves crashing dramatically'" class="topic-chip">Ocean drama</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Settings</div>
+      <div class="row2">
+        <div class="field">
+          <label class="field-label">Number of scenes</label>
+          <select id="grokNumClips">
+            <option value="2">2 scenes (20s)</option>
+            <option value="3" selected>3 scenes (30s)</option>
+            <option value="4">4 scenes (40s)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label">Scene duration</label>
+          <select id="grokClipDuration">
+            <option value="6">6s</option>
+            <option value="10" selected>10s</option>
+            <option value="15">15s</option>
+          </select>
+        </div>
+      </div>
+      <div class="field" style="margin-top:10px">
+        <label class="field-label">Grok Voice</label>
+        <select id="grokVoice">
+          <option value="ara">Ara — warm, natural</option>
+          <option value="eve">Eve — clear, professional</option>
+          <option value="leo">Leo — deep, authoritative</option>
+        </select>
+      </div>
+      <div class="field" style="margin-top:10px">
+        <label class="field-label">Music</label>
+        <div class="pill-group">
+          <button class="pill active" id="grokMusicYes" onclick="setGrokToggle('music','Yes')">On</button>
+          <button class="pill" id="grokMusicNo" onclick="setGrokToggle('music','No')">Off</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:24px">
+      <div class="card-title">Auto-post</div>
+      <div class="pill-group">
+        <button class="pill" id="grokUpYes" onclick="setGrokToggle('up','Yes')">Post to YouTube</button>
+        <button class="pill active" id="grokUpNo" onclick="setGrokToggle('up','No')">Download only</button>
+      </div>
+    </div>
+
+    <button class="btn btn-red" onclick="generateGrokVideo()" id="grokBtn" style="background:linear-gradient(135deg,#7c3aed,#4f46e5)">
+      Generate with Grok AI →
+    </button>
+
+  </div>
+
+  <!-- ============================================================
+       VIEW: HISTORY
+       ============================================================ -->
+  <div class="view" id="view-history">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 16px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button onclick="showView('source')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:0">←</button>
+        <div>
+          <div style="font-size:16px;font-weight:800;color:var(--white)">History</div>
+          <div style="font-size:11px;color:var(--muted)">Past downloads</div>
+        </div>
+      </div>
+      <button onclick="clearHistory()" style="background:none;border:1px solid #333;color:#555;font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-family:var(--font)">Clear all</button>
+    </div>
+
+    <div id="historyList">
+      <p style="color:var(--muted);font-size:13px;padding:12px 0">No downloads yet.</p>
+    </div>
 
   </div>
 
@@ -1576,8 +1794,32 @@ async function showDone() {
   document.getElementById('doneSubtitle').textContent = `${job.zip_size_mb}MB · ${job.total_clips} clips`;
 
   const dl = document.getElementById('downloadLink');
-  dl.href = `/api/jobs/${currentJobId}/download`;
+  const downloadUrl = `/api/jobs/${currentJobId}/download`;
+  dl.href = downloadUrl;
   dl.textContent = `⬇ Download ZIP — ${job.zip_size_mb}MB`;
+
+  // Auto-trigger download
+  const autoLink = document.createElement('a');
+  autoLink.href = downloadUrl;
+  autoLink.download = `xlab_shorts_${currentJobId.substring(0,8)}.zip`;
+  autoLink.style.display = 'none';
+  document.body.appendChild(autoLink);
+  autoLink.click();
+  setTimeout(() => document.body.removeChild(autoLink), 1000);
+
+  // Save to history
+  const historyItem = {
+    id: currentJobId,
+    date: new Date().toLocaleString(),
+    clips: job.total_clips || 0,
+    size: job.zip_size_mb || 0,
+    downloadUrl: downloadUrl,
+    query: document.getElementById('searchQuery')?.value || 'Unknown'
+  };
+  const history = JSON.parse(localStorage.getItem('xlab_history') || '[]');
+  history.unshift(historyItem);
+  localStorage.setItem('xlab_history', JSON.stringify(history.slice(0, 50))); // Keep last 50
+  renderHistory();
 
   const clips = job.clips || [];
   document.getElementById('clipsContainer').innerHTML = clips.map(c => {
@@ -1792,6 +2034,45 @@ window.addEventListener('load', () => {
 });
 
 // ============================================================
+// History
+// ============================================================
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  if (!list) return;
+  const history = JSON.parse(localStorage.getItem('xlab_history') || '[]');
+  if (!history.length) {
+    list.innerHTML = '<p style="color:var(--muted);font-size:13px;padding:12px 0">No downloads yet.</p>';
+    return;
+  }
+  list.innerHTML = history.map(h => `
+    <div class="card" style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--white);margin-bottom:3px">${h.query || 'Unknown'}</div>
+          <div style="font-size:11px;color:var(--muted)">${h.date}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">${h.clips} clips · ${h.size}MB</div>
+        </div>
+        <a href="${h.downloadUrl}" download style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);color:var(--green);font-size:11px;font-weight:700;padding:6px 12px;border-radius:8px;text-decoration:none;white-space:nowrap">
+          ⬇ Download
+        </a>
+      </div>
+    </div>
+  `).join('');
+}
+
+function clearHistory() {
+  if (confirm('Clear all history?')) {
+    localStorage.removeItem('xlab_history');
+    renderHistory();
+  }
+}
+
+// Load history on page load
+window.addEventListener('load', () => {
+  renderHistory();
+});
+
+// ============================================================
 // AI Content Creator (Level 3)
 // ============================================================
 let aiToggles = { narr: 'Yes', aimusic: 'Yes', aiup: 'No' };
@@ -1891,6 +2172,187 @@ async function generateAIContent() {
     btn.disabled = false;
     btn.textContent = '🤖 Generate AI Video →';
   }
+}
+
+// ============================================================
+// AI News Studio
+// ============================================================
+const newsToggles = { music: 'Yes', up: 'No' };
+
+function setNewsToggle(key, val) {
+  newsToggles[key] = val;
+  const map = { music: ['newsMusicYes','newsMusicNo'], up: ['newsUpYes','newsUpNo'] };
+  const [y, n] = map[key];
+  document.getElementById(y).classList.toggle('active', val==='Yes');
+  document.getElementById(n).classList.toggle('active', val==='No');
+}
+
+function getNewsCategories() {
+  const cats = [];
+  if (document.getElementById('cat_ai')?.checked) cats.push('ai_tools');
+  if (document.getElementById('cat_github')?.checked) cats.push('github_hacks');
+  if (document.getElementById('cat_hustle')?.checked) cats.push('hustles');
+  if (document.getElementById('cat_productivity')?.checked) cats.push('productivity');
+  if (document.getElementById('cat_tech')?.checked) cats.push('tech_news');
+  return cats;
+}
+
+async function runAINews() {
+  const btn = document.getElementById('newsBtn');
+  btn.disabled = true;
+  btn.textContent = 'Scanning X...';
+
+  const params = {
+    max_videos: parseInt(document.getElementById('newsMaxVideos').value),
+    use_aurora: document.getElementById('newsVisuals').value,
+    music_enabled: newsToggles.music,
+    auto_upload: newsToggles.up,
+    yt_access_token: getActiveToken() || '',
+    categories: getNewsCategories(),
+  };
+
+  try {
+    const r = await fetch('/api/ai-news', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(params)
+    });
+    const data = await r.json();
+    currentJobId = data.job_id;
+    showView('job');
+    document.getElementById('jobTitle').textContent = 'AI News Studio';
+    document.getElementById('doneBlock').style.display = 'none';
+    document.getElementById('logBox').textContent = '📡 Scanning X for latest AI news...';
+    startPolling();
+  } catch(e) {
+    alert('Failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Find & Create Now →';
+  }
+}
+
+async function scheduleAINews() {
+  const schedule = {
+    name: 'AI News Daily',
+    query: 'ai news studio',
+    mode: 'ai_news',
+    hour: parseInt(document.getElementById('newsSchHour').value),
+    minute: 0,
+    max_videos: parseInt(document.getElementById('newsMaxVideos').value),
+    use_aurora: document.getElementById('newsVisuals').value,
+    music_enabled: newsToggles.music,
+    auto_upload: newsToggles.up,
+    yt_access_token: getActiveToken() || '',
+    categories: getNewsCategories(),
+  };
+  const r = await fetch('/api/schedules', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(schedule)
+  });
+  const data = await r.json();
+  if (data.id) {
+    const h = schedule.hour;
+    alert(`✅ AI News scheduled daily at ${h > 12 ? h-12 : h}:00 ${h >= 12 ? 'PM' : 'AM'}`);
+  }
+}
+
+// ============================================================
+// Grok Originals
+// ============================================================
+const grokToggles = { music: 'Yes', up: 'No' };
+
+function setGrokToggle(key, val) {
+  grokToggles[key] = val;
+  const map = { music: ['grokMusicYes','grokMusicNo'], up: ['grokUpYes','grokUpNo'] };
+  const [y, n] = map[key];
+  document.getElementById(y).classList.toggle('active', val==='Yes');
+  document.getElementById(n).classList.toggle('active', val==='No');
+}
+
+async function generateGrokVideo() {
+  const topic = document.getElementById('grokTopic').value.trim();
+  if (!topic) { alert('Enter a topic'); return; }
+
+  const btn = document.getElementById('grokBtn');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+
+  const params = {
+    topic,
+    num_clips: parseInt(document.getElementById('grokNumClips').value),
+    clip_duration: parseInt(document.getElementById('grokClipDuration').value),
+    voice: document.getElementById('grokVoice').value,
+    music_enabled: grokToggles.music,
+    music_style: 'dramatic',
+    auto_upload: grokToggles.up,
+    yt_access_token: getActiveToken() || '',
+  };
+
+  try {
+    const r = await fetch('/api/grok-video', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(params)
+    });
+    const data = await r.json();
+    currentJobId = data.job_id;
+    showView('job');
+    document.getElementById('jobTitle').textContent = `Grok: "${topic}"`;
+    document.getElementById('doneBlock').style.display = 'none';
+    document.getElementById('logBox').textContent = '✨ Grok is generating your video...';
+    startPolling();
+  } catch(e) {
+    alert('Failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate with Grok AI →';
+  }
+}
+
+// ============================================================
+// Trending Topics (Grok powered)
+// ============================================================
+async function loadTrending() {
+  const btn = document.getElementById('trendBtn');
+  const query = document.getElementById('searchQuery').value || 'football';
+  btn.textContent = '⏳';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/trending', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({niche: query})
+    });
+    const data = await r.json();
+    const topics = data.topics || [];
+    const container = document.getElementById('trendingTopics');
+    if (topics.length) {
+      container.style.display = 'flex';
+      container.style.flexWrap = 'wrap';
+      container.style.gap = '6px';
+      container.innerHTML = topics.map(t => `
+        <button onclick="setTrend('${t.search_query}','${t.video_idea}')" 
+          style="background:#111;border:1px solid #222;color:#aaa;font-size:10px;padding:4px 10px;border-radius:6px;cursor:pointer;font-family:var(--font);text-align:left">
+          🔥 ${t.trend}<br><span style="color:#555;font-size:9px">${t.why?.substring(0,40) || ''}</span>
+        </button>
+      `).join('');
+    } else {
+      container.innerHTML = '<span style="color:#555;font-size:11px">No trends found — add Grok API key</span>';
+      container.style.display = 'block';
+    }
+    btn.textContent = '🔥 Trending';
+    btn.disabled = false;
+  } catch(e) {
+    btn.textContent = '🔥 Trending';
+    btn.disabled = false;
+  }
+}
+
+function setTrend(query, idea) {
+  document.getElementById('searchQuery').value = query;
+  document.getElementById('trendingTopics').style.display = 'none';
 }
 
 // ============================================================

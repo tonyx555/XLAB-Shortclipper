@@ -13,4 +13,4 @@ gTTS==2.5.1
 mediapipe==0.10.9
 opencv-python-headless==4.8.1.78
 stripe==7.0.0
-
+tweepy==4.14.0

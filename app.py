@@ -413,16 +413,38 @@ Respond ONLY with valid JSON, no markdown:
 }}"""
 
     try:
-        r = req.post('https://api.anthropic.com/v1/messages',
-            headers={{'x-api-key': api_key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'}},
-            json={{'model': 'claude-sonnet-4-20250514', 'max_tokens': 2000,
-                  'messages': [{{'role': 'user', 'content': prompt}}]}},
-            timeout=30)
-        text = r.json()['content'][0]['text'].replace('```json','').replace('```','').strip()
+        # Use Grok for script generation
+        grok_key = os.environ.get('GROK_API_KEY', '').strip()
+        if grok_key:
+            text = call_grok(prompt, grok_key)
+        else:
+            text = None
+        
+        if not text:
+            # Fallback to Gemini/Claude API key if provided
+            r = req.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
+                params={'key': api_key},
+                json={'contents': [{'parts': [{'text': prompt}]}]},
+                timeout=30)
+            data = r.json()
+            text = data['candidates'][0]['content']['parts'][0]['text']
+        
+        text = text.replace('```json','').replace('```','').strip()
+        start = text.find('{')
+        end = text.rfind('}') + 1
+        if start >= 0 and end > start:
+            text = text[start:end]
         return json.loads(text)
     except Exception as e:
         logger.error(f'Script generation error: {e}')
-        return None
+        # Return fallback script so generation continues
+        return {
+            'title': topic[:60],
+            'hook': f'You need to see this about {topic}',
+            'points': [{'title': f'Scene {i+1}', 'search_query': topic, 'narration': f'Here is what you need to know about {topic}', 'duration': duration_per_point} for i in range(num_points)],
+            'outro': 'Follow for more',
+            'hashtags': ['#Shorts', '#AI', '#Tech']
+        }
 
 
 def post_to_x(video_path, text, api_key, api_secret, access_token, access_token_secret):

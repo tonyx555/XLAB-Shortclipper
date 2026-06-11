@@ -6,6 +6,8 @@ direct ZIP download. No Firebase or GCS needed.
 
 import os, json, shutil, glob, zipfile, subprocess, sys, time
 import threading, uuid, logging, warnings
+import hashlib, secrets
+from functools import wraps
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, send_file, render_template
 
@@ -278,20 +280,13 @@ def cut_vertical(video_path, start, length, out_path,
         cx, cy = (w - crop) // 2, (h - crop) // 2
         vf_base = f'crop={crop}:{crop}:{cx}:{cy},scale=1080:1080,pad=1080:1920:0:(oh-ih)/2:black'
 
-    if watermark_text.strip():
-        pos_map = {
-            'top_left':    'x=20:y=20',
-            'top_right':   'x=w-tw-20:y=20',
-            'bottom_left': 'x=20:y=h-th-20',
-            'bottom_right':'x=w-tw-20:y=h-th-20'
-        }
-        pos  = pos_map.get(watermark_position, 'x=w-tw-20:y=h-th-20')
-        safe = watermark_text.replace("'", "\\'").replace(":", "\\:")
-        wm   = f"drawtext=text='{safe}':fontsize=32:fontcolor=white:alpha=0.7:{pos}:box=1:boxcolor=black@0.3:boxborderw=6"
-        vf   = f'{vf_base},{wm}'
-    else:
-        vf = vf_base
+    # Always add XLAB brand — subtle top right
+    xlab_brand = "drawtext=text='XLAB':fontsize=24:fontcolor=white:alpha=0.4:x=w-tw-16:y=16:fontweight=bold"
 
+    if watermark_text.strip():
+        vf   = f'{vf_base},{xlab_brand},{wm}'
+    else:
+        vf   = f'{vf_base},{xlab_brand}'
     subprocess.run([
         'ffmpeg', '-ss', str(start), '-i', video_path,
         '-t', str(length), '-vf', vf,
@@ -2172,6 +2167,146 @@ def create_grok_video():
     thread = threading.Thread(target=process_grok_original_video, args=(job_id, params), daemon=True)
     thread.start()
     return jsonify({'job_id': job_id})
+
+
+# ============================================================
+# AUTH ROUTES
+# ============================================================
+
+@app.route('/login')
+def login_page():
+    return render_template('login.html')
+
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    data = request.json
+    email = data.get('email','').lower().strip()
+    password = data.get('password','')
+    name = data.get('name','')
+    if not email or not password:
+        return jsonify({'error': 'Email and password required'}), 400
+    if email in USERS:
+        return jsonify({'error': 'Email already registered'}), 400
+    USERS[email] = {
+        'email': email,
+        'name': name,
+        'password': hash_password(password),
+        'plan': 'free',
+        'created_at': datetime.now().isoformat(),
+        'channels': 0,
+        'videos_generated': 0
+    }
+    token = generate_token()
+    SESSIONS[token] = USERS[email]
+    return jsonify({'token': token, 'user': USERS[email], 'redirect': '/'})
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    data = request.json
+    email = data.get('email','').lower().strip()
+    password = data.get('password','')
+    # Admin bypass
+    if password == ADMIN_PASSWORD:
+        token = ADMIN_TOKEN
+        return jsonify({'token': token, 'user': {'email': 'admin', 'plan': 'admin', 'is_admin': True}, 'redirect': '/'})
+    user = USERS.get(email)
+    if not user or user['password'] != hash_password(password):
+        return jsonify({'error': 'Invalid email or password'}), 401
+    token = generate_token()
+    SESSIONS[token] = user
+    return jsonify({'token': token, 'user': user, 'redirect': '/'})
+
+@app.route('/api/auth/me', methods=['GET'])
+def get_me():
+    user = get_current_user(request)
+    if not user:
+        return jsonify({'error': 'Not authenticated'}), 401
+    return jsonify(user)
+
+@app.route('/api/auth/logout', methods=['POST'])
+def logout():
+    token = request.headers.get('X-Auth-Token') or request.cookies.get('auth_token')
+    if token and token in SESSIONS:
+        del SESSIONS[token]
+    return jsonify({'success': True})
+
+@app.route('/api/auth/plans', methods=['GET'])
+def get_plans():
+    return jsonify({
+        'plans': [
+            {
+                'id': 'free',
+                'name': 'Free',
+                'price': 0,
+                'features': ['3 videos/month', '1 channel', 'YouTube clips only'],
+                'limits': {'videos': 3, 'channels': 1}
+            },
+            {
+                'id': 'pro',
+                'name': 'Pro',
+                'price': 29,
+                'features': ['100 videos/month', '3 channels', 'AI News Studio', 'Grok Originals', 'Priority processing'],
+                'limits': {'videos': 100, 'channels': 3},
+                'stripe_price_id': os.environ.get('STRIPE_PRO_PRICE_ID', '')
+            },
+            {
+                'id': 'agency',
+                'name': 'Agency',
+                'price': 99,
+                'features': ['Unlimited videos', 'Unlimited channels', 'All features', 'White label', 'API access'],
+                'limits': {'videos': 999999, 'channels': 999},
+                'stripe_price_id': os.environ.get('STRIPE_AGENCY_PRICE_ID', '')
+            }
+        ]
+    })
+
+
+@app.route('/api/stripe/checkout', methods=['POST'])
+def stripe_checkout():
+    import stripe
+    stripe.api_key = os.environ.get('STRIPE_SECRET_KEY', '')
+    if not stripe.api_key:
+        return jsonify({'error': 'Stripe not configured'}), 500
+    data = request.json
+    plan = data.get('plan', 'pro')
+    user = get_current_user(request)
+    price_id = os.environ.get(f'STRIPE_{"PRO" if plan=="pro" else "AGENCY"}_PRICE_ID', '')
+    if not price_id:
+        return jsonify({'error': 'Price not configured'}), 500
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{'price': price_id, 'quantity': 1}],
+            mode='subscription',
+            success_url=f'{request.host_url}?upgraded=true',
+            cancel_url=f'{request.host_url}pricing',
+            customer_email=user.get('email') if user else None,
+            metadata={'plan': plan, 'email': user.get('email','') if user else ''}
+        )
+        return jsonify({'url': session.url})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/stripe/webhook', methods=['POST'])
+def stripe_webhook():
+    import stripe
+    stripe.api_key = os.environ.get('STRIPE_SECRET_KEY', '')
+    webhook_secret = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
+    payload = request.get_data()
+    sig = request.headers.get('Stripe-Signature', '')
+    try:
+        event = stripe.Webhook.construct_event(payload, sig, webhook_secret)
+        if event['type'] == 'checkout.session.completed':
+            session = event['data']['object']
+            email = session.get('customer_email') or session.get('metadata', {}).get('email', '')
+            plan = session.get('metadata', {}).get('plan', 'pro')
+            if email and email in USERS:
+                USERS[email]['plan'] = plan
+                logger.info(f'Upgraded {email} to {plan}')
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
 
 @app.route('/api/trending', methods=['POST'])

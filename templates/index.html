@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -608,13 +608,29 @@ select { cursor: pointer; }
 <!-- NAV -->
 <nav>
   <div class="nav-logo">X<span>LAB</span></div>
-  <div class="nav-right">
-    <button onclick="showView('ai-content')" style="background:linear-gradient(135deg,rgba(230,51,41,0.2),rgba(100,50,255,0.15));border:1px solid rgba(230,51,41,0.3);color:#ff6b5b;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:1px;padding:6px 10px;border-radius:8px">STUDIO</button>
-    <button onclick="showView('ainews')" style="background:linear-gradient(135deg,rgba(34,197,94,0.15),rgba(16,185,129,0.1));border:1px solid rgba(34,197,94,0.25);color:#6ee7b7;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:0.5px;padding:6px 10px;border-radius:8px">📡</button>
-    <button onclick="showView('grok')" style="background:linear-gradient(135deg,rgba(124,58,237,0.2),rgba(79,70,229,0.15));border:1px solid rgba(124,58,237,0.3);color:#a78bfa;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:0.5px;padding:6px 10px;border-radius:8px">✨</button>
-    <button onclick="showView('history')" style="background:none;border:none;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;letter-spacing:0.5px;padding:6px 10px;border-radius:8px;border:1px solid var(--border)">📋</button>
-    <button onclick="showView('schedule')" style="background:none;border:none;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;letter-spacing:0.5px;padding:6px 10px;border-radius:8px;border:1px solid var(--border)">⏰</button>
+  <div class="nav-right" style="position:relative">
+    <button onclick="toggleMenu()" id="menuBtn" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#888;font-size:18px;cursor:pointer;padding:6px 12px;border-radius:10px;line-height:1">≡</button>
     <span class="nav-badge">Beta</span>
+
+    <!-- Dropdown menu -->
+    <div id="navMenu" style="display:none;position:absolute;top:44px;right:0;background:#111;border:1px solid #1e1e1e;border-radius:14px;padding:8px;min-width:200px;z-index:200;box-shadow:0 8px 32px rgba(0,0,0,0.5)">
+      <button onclick="showView('ai-content');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#e8e8f0;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
+        <span style="color:#ff6b5b;font-size:16px">🎬</span> Content Studio
+      </button>
+      <button onclick="showView('ainews');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#e8e8f0;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
+        <span style="color:#6ee7b7;font-size:16px">📡</span> AI News Studio
+      </button>
+      <button onclick="showView('grok');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#e8e8f0;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
+        <span style="color:#a78bfa;font-size:16px">✨</span> Grok Originals
+      </button>
+      <div style="height:1px;background:#1e1e1e;margin:6px 0"></div>
+      <button onclick="showView('schedule');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#888;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
+        <span style="font-size:16px">⏰</span> Schedules
+      </button>
+      <button onclick="showView('history');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#888;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
+        <span style="font-size:16px">📋</span> History
+      </button>
+    </div>
   </div>
 </nav>
 
@@ -2173,6 +2189,20 @@ async function generateAIContent() {
     btn.textContent = '🤖 Generate AI Video →';
   }
 }
+
+// Menu toggle
+function toggleMenu() {
+  const menu = document.getElementById('navMenu');
+  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+// Close menu when clicking outside
+document.addEventListener('click', (e) => {
+  const menu = document.getElementById('navMenu');
+  const btn = document.getElementById('menuBtn');
+  if (menu && btn && !menu.contains(e.target) && !btn.contains(e.target)) {
+    menu.style.display = 'none';
+  }
+});
 
 // ============================================================
 // AI News Studio

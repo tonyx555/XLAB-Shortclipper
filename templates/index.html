@@ -623,8 +623,8 @@ select { cursor: pointer; }
 <nav>
   <div class="nav-logo">X<span>LAB</span></div>
   <div class="nav-right" style="position:relative">
+    <div id="userBadge" style="font-size:10px;font-weight:700;padding:4px 8px;border-radius:6px;border:1px solid #1e1e1e;color:#555;cursor:pointer" onclick="showView('account')"></div>
     <button onclick="toggleMenu()" id="menuBtn" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#888;font-size:18px;cursor:pointer;padding:6px 12px;border-radius:10px;line-height:1">≡</button>
-    <span class="nav-badge">Beta</span>
 
     <!-- Dropdown menu -->
     <div id="navMenu" style="display:none;position:absolute;top:44px;right:0;background:#111;border:1px solid #1e1e1e;border-radius:14px;padding:8px;min-width:200px;z-index:200;box-shadow:0 8px 32px rgba(0,0,0,0.5)">
@@ -649,6 +649,10 @@ select { cursor: pointer; }
       </button>
       <button onclick="showView('history');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#888;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
         <span style="font-size:16px">📋</span> History
+      </button>
+      <div style="height:1px;background:#1e1e1e;margin:6px 0"></div>
+      <button onclick="logout()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#444;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
+        <span style="font-size:16px">↩</span> Sign out
       </button>
     </div>
   </div>
@@ -2401,6 +2405,49 @@ async function deleteLibraryVideo(vid) {
 window.addEventListener('load', () => {
   loadLibrary();
 });
+
+// ============================================================
+// Auth
+// ============================================================
+function getAuthToken() {
+  return localStorage.getItem('xlab_token') || '';
+}
+
+function getUser() {
+  try { return JSON.parse(localStorage.getItem('xlab_user') || '{}'); } catch { return {}; }
+}
+
+function initAuth() {
+  const user = getUser();
+  const badge = document.getElementById('userBadge');
+  if (!badge) return;
+  if (user.email) {
+    const planColors = { free: '#555', pro: '#ff6b5b', agency: '#a78bfa', admin: '#22c55e' };
+    const color = planColors[user.plan] || '#555';
+    badge.style.color = color;
+    badge.style.borderColor = color + '33';
+    badge.textContent = user.plan === 'admin' ? '⚡ Admin' : (user.plan?.toUpperCase() || 'FREE');
+  }
+}
+
+function logout() {
+  localStorage.removeItem('xlab_token');
+  localStorage.removeItem('xlab_user');
+  window.location.href = '/login';
+}
+
+// Add auth token to all fetch requests
+const _originalFetch = window.fetch;
+window.fetch = function(url, options = {}) {
+  const token = getAuthToken();
+  if (token) {
+    options.headers = options.headers || {};
+    options.headers['X-Auth-Token'] = token;
+  }
+  return _originalFetch(url, options);
+};
+
+window.addEventListener('load', initAuth);
 
 // Menu toggle
 function toggleMenu() {

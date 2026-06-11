@@ -482,6 +482,7 @@ def call_grok(prompt, api_key):
     import requests as req
     if not api_key:
         return None
+    api_key = api_key.strip()
     for model in ['grok-3', 'grok-2-1212', 'grok-beta']:
         try:
             r = req.post(
@@ -720,7 +721,7 @@ def process_ai_news_studio(job_id, params):
     try:
         update_job(job_id, {'status': 'processing', 'started_at': datetime.now().isoformat()})
 
-        grok_key = os.environ.get('GROK_API_KEY', '') or params.get('grok_key', '')
+        grok_key = (os.environ.get('GROK_API_KEY', '') or params.get('grok_key', '')).strip()
         max_videos = int(params.get('max_videos', 3))
         use_aurora = params.get('use_aurora') == 'Yes'
         auto_upload = params.get('auto_upload') == 'Yes'
@@ -900,7 +901,7 @@ def process_grok_original_video(job_id, params):
     try:
         update_job(job_id, {'status': 'processing', 'started_at': datetime.now().isoformat()})
         topic = params.get('topic', '')
-        grok_key = os.environ.get('GROK_API_KEY', '') or params.get('grok_key', '')
+        grok_key = (os.environ.get('GROK_API_KEY', '') or params.get('grok_key', '')).strip()
         num_clips = int(params.get('num_clips', 3))
         clip_duration = int(params.get('clip_duration', 10))
         music_enabled = params.get('music_enabled') == 'Yes'

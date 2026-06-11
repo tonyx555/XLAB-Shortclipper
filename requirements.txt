@@ -12,3 +12,5 @@ google-api-python-client==2.125.0
 gTTS==2.5.1
 mediapipe==0.10.9
 opencv-python-headless==4.8.1.78
+stripe==7.0.0
+

@@ -624,7 +624,7 @@ select { cursor: pointer; }
   <div class="nav-logo">X<span>LAB</span></div>
   <div class="nav-right" style="position:relative">
     <div id="userBadge" style="font-size:10px;font-weight:700;padding:4px 8px;border-radius:6px;border:1px solid #1e1e1e;color:#555;cursor:pointer" onclick="showView('account')"></div>
-    <button onclick="toggleMenu()" id="menuBtn" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#888;font-size:18px;cursor:pointer;padding:6px 12px;border-radius:10px;line-height:1">≡</button>
+    <button onclick="toggleMenu(event)" id="menuBtn" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#888;font-size:18px;cursor:pointer;padding:6px 12px;border-radius:10px;line-height:1">≡</button>
 
     <!-- Dropdown menu -->
     <div id="navMenu" style="display:none;position:absolute;top:44px;right:0;background:#111;border:1px solid #1e1e1e;border-radius:14px;padding:8px;min-width:200px;z-index:200;box-shadow:0 8px 32px rgba(0,0,0,0.5)">
@@ -1586,6 +1586,14 @@ select { cursor: pointer; }
 </div>
 
 <script>
+window.onerror = function(msg, src, line, col, err) {
+  document.title = 'JS ERR: ' + msg + ' L' + line;
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#e63329;color:white;padding:10px;font-size:12px;z-index:9999;word-break:break-all';
+  d.textContent = 'JS Error: ' + msg + ' (line ' + line + ')';
+  document.body?.appendChild(d);
+  return false;
+};
 // ============================================================
 // State
 // ============================================================
@@ -2346,40 +2354,48 @@ function filterLibrary(category) {
 }
 
 function renderLibrary(videos) {
-  const list = document.getElementById('libraryList');
+  var list = document.getElementById("libraryList");
   if (!list) return;
   if (!videos.length) {
-    list.innerHTML = '<p style="color:var(--muted);font-size:13px;padding:12px 0">No videos in this category yet.</p>';
+    list.innerHTML = '<p style="color:#555;font-size:13px">No videos yet.</p>';
     return;
   }
-  const sourceLabels = { ai_news:'📡 AI News', grok_original:'✨ Grok', studio:'🎬 Studio', clips:'✂️ Clips' };
-  list.innerHTML = videos.map(v => {
-    const platforms = ['YouTube','TikTok','Instagram','X'];
-    const published = v.published || [];
-    return `
-    <div class="card" style="margin-bottom:8px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:12px;font-weight:700;color:#e8e8f0;margin-bottom:3px;line-height:1.3">${v.title}</div>
-          <div style="font-size:10px;color:#555;margin-bottom:6px">${v.created_at?.substring(0,16).replace('T',' ')} · ${v.size_mb}MB</div>
-          <span style="background:#111;border:1px solid #1e1e1e;color:#555;font-size:9px;padding:1px 6px;border-radius:3px">${sourceLabels[v.source]||v.source}</span>
-        </div>
-        <a href="/api/library/${v.id}/download" style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.25);color:#22c55e;font-size:10px;font-weight:700;padding:6px 10px;border-radius:8px;text-decoration:none;white-space:nowrap;flex-shrink:0">⬇ Download</a>
-      </div>
-      <!-- Platform publish tracking -->
-      <div style="display:flex;gap:5px;margin-top:8px;flex-wrap:wrap">
-        ${platforms.map(p => `
-          <button onclick="markPublished('${v.id}','${p}',this)"
-            style="background:${published.includes(p) ? 'rgba(34,197,94,0.1)' : '#0a0a0a'};
-                   border:1px solid ${published.includes(p) ? 'rgba(34,197,94,0.3)' : '#1e1e1e'};
-                   color:${published.includes(p) ? '#22c55e' : '#444'};
-                   font-size:9px;font-weight:700;padding:3px 8px;border-radius:5px;cursor:pointer;font-family:var(--font)">
-            ${published.includes(p) ? '✓' : '+'} ${p}
-          </button>`).join('')}
-        <button onclick="deleteLibraryVideo('${v.id}')" style="background:none;border:none;color:#2a2a2a;font-size:9px;cursor:pointer;font-family:var(--font);margin-left:auto">🗑</button>
-      </div>
-    </div>`;
-  }).join('');
+  list.innerHTML = "";
+  var sl = {"ai_news":"AI News","grok_original":"Grok","studio":"Studio","clips":"Clips"};
+  videos.forEach(function(v) {
+    var pub = v.published || [];
+    var card = document.createElement("div");
+    card.className = "card";
+    card.style.marginBottom = "8px";
+    var inner = document.createElement("div");
+    inner.innerHTML = (
+      '<div style="display:flex;justify-content:space-between;gap:8px">' +
+      '<div style="flex:1">' +
+      '<div style="font-size:12px;font-weight:700;color:#e8e8f0">' + (v.title || "") + "</div>" +
+      '<div style="font-size:10px;color:#555">' + ((v.created_at || "").substring(0, 16)) + " &middot; " + (v.size_mb || 0) + "MB &middot; " + (sl[v.source] || v.source) + "</div>" +
+      "</div>" +
+      '<a href="/api/library/' + v.id + '/download" style="color:#22c55e;font-size:10px;padding:6px 10px;border:1px solid rgba(34,197,94,0.3);border-radius:8px;text-decoration:none;flex-shrink:0">&#11015;</a>' +
+      "</div>"
+    );
+    card.appendChild(inner);
+    var btnsDiv = document.createElement("div");
+    btnsDiv.style.cssText = "display:flex;gap:5px;margin-top:8px;flex-wrap:wrap";
+    ["YouTube", "TikTok", "Instagram", "X"].forEach(function(p) {
+      var a = pub.indexOf(p) >= 0;
+      var b = document.createElement("button");
+      b.textContent = (a ? "\u2713" : "+") + " " + p;
+      b.style.cssText = "background:" + (a ? "rgba(34,197,94,0.1)" : "#0a0a0a") + ";border:1px solid " + (a ? "rgba(34,197,94,0.3)" : "#1e1e1e") + ";color:" + (a ? "#22c55e" : "#444") + ";font-size:9px;font-weight:700;padding:3px 8px;border-radius:5px;cursor:pointer";
+      b.onclick = (function(vid, plat, btn) { return function() { markPublished(vid, plat, btn); }; })(v.id, p, b);
+      btnsDiv.appendChild(b);
+    });
+    var del = document.createElement("button");
+    del.innerHTML = "&#128465;";
+    del.style.cssText = "background:none;border:none;color:#333;font-size:9px;cursor:pointer;margin-left:auto";
+    del.onclick = (function(vid) { return function() { deleteLibraryVideo(vid); }; })(v.id);
+    btnsDiv.appendChild(del);
+    card.appendChild(btnsDiv);
+    list.appendChild(card);
+  });
 }
 
 async function markPublished(vid, platform, btn) {
@@ -2431,30 +2447,26 @@ function logout() {
 
 // Add auth token to all fetch requests
 const _originalFetch = window.fetch;
-window.fetch = function(url, options = {}) {
-  const token = getAuthToken();
-  if (token) {
-    options.headers = options.headers || {};
-    options.headers['X-Auth-Token'] = token;
-  }
-  return _originalFetch(url, options);
+window.fetch = function(url, opts) {
+  opts = opts || {};
+  try {
+    const token = localStorage.getItem('xlab_token') || '';
+    if (token) {
+      opts.headers = opts.headers || {};
+      opts.headers['X-Auth-Token'] = token;
+    }
+  } catch(e) {}
+  return _originalFetch(url, opts);
 };
 
 
 
 // Menu toggle
-function toggleMenu() {
+function toggleMenu(e) {
+  if (e) e.stopPropagation();
   const menu = document.getElementById('navMenu');
-  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
 }
-// Close menu when clicking outside
-document.addEventListener('click', (e) => {
-  const menu = document.getElementById('navMenu');
-  const btn = document.getElementById('menuBtn');
-  if (menu && btn && !menu.contains(e.target) && !btn.contains(e.target)) {
-    menu.style.display = 'none';
-  }
-});
 
 // ============================================================
 // Multi-Channel Manager
@@ -2621,7 +2633,6 @@ async function runAINews() {
     btn.disabled = false;
     btn.textContent = 'Find & Create Now →';
   }
-}
 }
 
 async function scheduleAINews() {
@@ -2859,16 +2870,14 @@ async function deleteSchedule(id) {
 // Init — single load handler
 // ============================================================
 window.addEventListener('load', () => {
-  initAuth();
-  initYouTubeUI();
-  loadSchedules();
-  renderHistory();
-  loadLibrary();
-  loadChannels();
+  const inits = [initAuth, initYouTubeUI, loadSchedules, renderHistory, loadLibrary, loadChannels];
+  inits.forEach(fn => { try { fn(); } catch(e) { console.warn('Init error:', fn.name, e); } });
   // Load saved Grok key
-  const saved = localStorage.getItem('grok_key') || '';
-  const grokInput = document.getElementById('grokKey');
-  if (grokInput && saved) grokInput.value = saved;
+  try {
+    const saved = localStorage.getItem('grok_key') || '';
+    const grokInput = document.getElementById('grokKey');
+    if (grokInput && saved) grokInput.value = saved;
+  } catch(e) {}
 });
 </script>
 </body>

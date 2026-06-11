@@ -1337,10 +1337,38 @@ function renderVideos() {
         <div class="video-badges">
           <span class="badge ${platBadge[v.platform]||'badge-num'}">${v.platform}</span>
           <span class="badge badge-num">#${i+1}</span>
+          <button onclick="event.stopPropagation();loadFormats('${v.id}','${v.url}',this)" style="background:none;border:1px solid #2a2a2a;color:#555;font-size:9px;padding:2px 7px;border-radius:4px;cursor:pointer;font-family:var(--font);letter-spacing:0.3px">formats</button>
+          <select id="fmt_${v.id}" style="display:none;font-size:10px;background:#111;border:1px solid #2a2a2a;color:#aaa;border-radius:4px;padding:2px 6px;font-family:var(--font);max-width:130px" onclick="event.stopPropagation()" onchange="videoFormats['${v.id}']=this.value"></select>
         </div>
       </div>
     </div>`;
   }).join('');
+}
+
+// Format picker
+const videoFormats = {};
+async function loadFormats(videoId, url, btn) {
+    btn.textContent = '...';
+    btn.disabled = true;
+    try {
+        const r = await fetch('/api/formats', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({url})
+        });
+        const data = await r.json();
+        const sel = document.getElementById('fmt_' + videoId);
+        if (sel && data.formats) {
+            sel.innerHTML = data.formats.map(f => `<option value="${f.id}">${f.label}</option>`).join('');
+            sel.style.display = 'inline-block';
+            videoFormats[videoId] = data.formats[0]?.id || 'best';
+            btn.textContent = '✓';
+            btn.style.color = '#22c55e';
+        }
+    } catch(e) {
+        btn.textContent = '!';
+        btn.disabled = false;
+    }
 }
 
 function toggleVideo(i) {
@@ -1469,17 +1497,26 @@ async function generateShorts() {
   };
 
   try {
+    // Create job with pending_uploads flag
     const r = await fetch('/api/jobs', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(params)
+      body: JSON.stringify({...params, pending_uploads: true})
     });
     const data = await r.json();
     currentJobId = data.job_id;
+
     showView('job');
     document.getElementById('doneBlock').style.display = 'none';
-    document.getElementById('logBox').textContent = 'Job queued...';
-    document.getElementById('progressFill').style.width = '0%';
+    document.getElementById('logBox').textContent = '[Browser] Downloading videos...\nKeep tab open for ~2 mins';
+    document.getElementById('progressFill').style.width = '5%';
+
+    // Download in browser via cobalt then upload to server
+    await downloadAndUploadVideos(currentJobId, selectedVideos);
+
+    // Signal server to start processing
+    await fetch(`/api/jobs/${currentJobId}/start`, {method:'POST'});
+
     startPolling();
   } catch(e) {
     alert('Failed: '+e.message);

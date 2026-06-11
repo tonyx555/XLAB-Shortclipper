@@ -76,10 +76,12 @@ def run_scheduled_jobs():
                         'schedule_name': schedule.get('name', '')
                     }
                     SCHEDULES[sid].setdefault('job_history', []).append(job_id)
-                    # Use AI content pipeline if mode is ai_content
-                    if schedule.get('mode') == 'ai_content':
+                    mode = schedule.get('mode', 'search')
+                    if mode == 'ai_content':
                         ai_params = {**params, 'topic': schedule.get('query', '')}
                         t2 = threading.Thread(target=process_ai_content_job, args=(job_id, ai_params), daemon=True)
+                    elif mode == 'ai_news':
+                        t2 = threading.Thread(target=process_ai_news_studio, args=(job_id, params), daemon=True)
                     else:
                         t2 = threading.Thread(target=process_job, args=(job_id, params), daemon=True)
                     t2.start()
@@ -231,8 +233,17 @@ def get_duration(path):
     return float(json.loads(r.stdout)['format']['duration'])
 
 def extract_audio(video_path, audio_path):
-    subprocess.run(['ffmpeg','-i',video_path,'-vn','-ar','16000','-ac','1',
-        '-y', audio_path, '-loglevel','quiet'], check=True)
+    result = subprocess.run([
+        'ffmpeg','-i',video_path,'-vn','-ar','16000','-ac','1',
+        '-t','300','-y',audio_path,'-loglevel','quiet'
+    ], capture_output=True, timeout=120)
+    if result.returncode != 0:
+        # Re-encode fallback for corrupt containers
+        subprocess.run([
+            'ffmpeg','-i',video_path,'-vn',
+            '-acodec','pcm_s16le','-ar','16000','-ac','1',
+            '-t','300','-y',audio_path,'-loglevel','quiet'
+        ], capture_output=True, timeout=120)
 
 def detect_peaks(audio_path, sensitivity=0.75, min_gap=30):
     import librosa
@@ -417,6 +428,421 @@ Respond ONLY with valid JSON, no markdown:
     except Exception as e:
         logger.error(f'Script generation error: {e}')
         return None
+
+
+def call_grok(prompt, api_key):
+    """Call Grok API for text generation."""
+    import requests as req
+    if not api_key:
+        return None
+    try:
+        r = req.post(
+            'https://api.x.ai/v1/chat/completions',
+            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            json={'model': 'grok-2-latest', 'messages': [{'role': 'user', 'content': prompt}],
+                  'max_tokens': 2000, 'temperature': 0.7},
+            timeout=30
+        )
+        return r.json()['choices'][0]['message']['content']
+    except Exception as e:
+        logger.error(f'Grok error: {e}')
+        return None
+
+
+def grok_tts(text, output_path, api_key, voice='ara'):
+    """Grok TTS - natural voice. $4.20/1M chars."""
+    import requests as req
+    if not api_key:
+        return False
+    try:
+        r = req.post('https://api.x.ai/v1/audio/speech',
+            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            json={'model': 'grok-tts', 'input': text, 'voice': voice, 'response_format': 'mp3'},
+            timeout=30)
+        if r.status_code == 200:
+            with open(output_path, 'wb') as f:
+                f.write(r.content)
+            return os.path.exists(output_path) and os.path.getsize(output_path) > 1000
+        logger.error(f'Grok TTS: {r.status_code} {r.text[:100]}')
+        return False
+    except Exception as e:
+        logger.error(f'Grok TTS error: {e}')
+        return False
+
+
+def grok_generate_video(prompt, output_path, api_key, duration=10, aspect_ratio='9:16'):
+    """Generate video using Grok Aurora. ~$0.15/clip, ~17-60s generation."""
+    import requests as req
+    if not api_key:
+        return False
+    try:
+        r = req.post('https://api.x.ai/v1/video/generations',
+            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            json={'model': 'grok-imagine-video', 'prompt': prompt,
+                  'duration': duration, 'aspect_ratio': aspect_ratio,
+                  'resolution': '720p', 'with_audio': True},
+            timeout=30)
+        if r.status_code not in (200, 201, 202):
+            logger.error(f'Grok video submit: {r.status_code} {r.text[:200]}')
+            return False
+        data = r.json()
+        generation_id = data.get('id') or data.get('generation_id')
+        if not generation_id:
+            return False
+        # Poll until ready
+        for attempt in range(30):
+            time.sleep(10)
+            r2 = req.get(f'https://api.x.ai/v1/video/generations/{generation_id}',
+                headers={'Authorization': f'Bearer {api_key}'}, timeout=15)
+            if r2.status_code != 200:
+                continue
+            result = r2.json()
+            status = result.get('status', '')
+            if status == 'succeeded':
+                video_url = (result.get('video') or {}).get('url') or result.get('url')
+                if video_url:
+                    r3 = req.get(video_url, stream=True, timeout=120)
+                    with open(output_path, 'wb') as f:
+                        for chunk in r3.iter_content(chunk_size=65536):
+                            if chunk: f.write(chunk)
+                    return os.path.exists(output_path) and os.path.getsize(output_path) > 10000
+                return False
+            elif status in ('failed', 'cancelled'):
+                logger.error(f'Grok video failed: {result}')
+                return False
+        return False
+    except Exception as e:
+        logger.error(f'Grok video error: {e}')
+        return False
+
+
+def grok_trending_topics(niche, api_key):
+    """Get trending topics from X using Grok real-time data."""
+    prompt = f"""You have access to real-time X data.
+What are the top 5 trending topics related to "{niche}" right now?
+Respond ONLY with valid JSON:
+{{"topics": [{{"trend": "topic", "video_idea": "specific video title", "search_query": "YouTube search", "why": "why trending"}}]}}"""
+    text = call_grok(prompt, api_key)
+    if not text:
+        return None
+    try:
+        return json.loads(text.replace('```json','').replace('```','').strip())
+    except:
+        return None
+
+
+def grok_find_ai_news(api_key, categories=None):
+    """Use Grok to find latest AI news, hacks, tools from X that aren't viral yet."""
+    if not categories:
+        categories = ['ai tools', 'github hacks', 'ai hustles', 'tech tools', 'productivity hacks']
+
+    prompt = f"""You have real-time access to X (Twitter) data.
+
+Find the 8 most interesting posts from the LAST 48 HOURS about:
+- New AI tools and models just released
+- GitHub repos with clever AI hacks or automation
+- Money-making AI hustles and side income methods
+- Productivity hacks using AI
+- Underrated tech tools people are discovering
+- AI news that is NOT yet trending on TikTok/YouTube/Instagram
+
+For each post find something that would genuinely surprise or excite people who haven't seen it.
+
+Respond ONLY with valid JSON:
+{{"items": [
+  {{
+    "category": "ai_tool|github_hack|hustle|tech_news|productivity",
+    "title": "catchy Short title under 60 chars",
+    "hook": "opening 2 seconds — must grab attention immediately",
+    "x_source": "original X post summary",
+    "script": "30 second narration script — punchy, exciting, explains the value",
+    "search_query": "YouTube search to find relevant footage",
+    "video_prompt": "Aurora video generation prompt for cinematic visuals",
+    "hashtags": ["#AI", "#Tech", 5 more relevant],
+    "why_viral": "why this hasn't blown up yet and why it will",
+    "affiliate_angle": "how to monetize this content"
+  }}
+]}}"""
+
+    text = call_grok(prompt, api_key)
+    if not text:
+        return None
+    try:
+        text = text.replace('```json','').replace('```','').strip()
+        return json.loads(text)
+    except Exception as e:
+        logger.error(f'AI news parse error: {e}')
+        return None
+
+
+def process_ai_news_studio(job_id, params):
+    """Auto-find AI news from X and create + post Shorts automatically."""
+    work_dir = f'/tmp/ainews_{job_id}'
+    os.makedirs(work_dir, exist_ok=True)
+
+    try:
+        update_job(job_id, {'status': 'processing', 'started_at': datetime.now().isoformat()})
+
+        grok_key = os.environ.get('GROK_API_KEY', '') or params.get('grok_key', '')
+        max_videos = int(params.get('max_videos', 3))
+        use_aurora = params.get('use_aurora') == 'Yes'
+        auto_upload = params.get('auto_upload') == 'Yes'
+        yt_token = params.get('yt_access_token', '')
+        music_enabled = params.get('music_enabled', 'Yes') == 'Yes'
+        categories = params.get('categories', [])
+
+        if not grok_key:
+            raise Exception('Grok API key required')
+
+        add_log(job_id, '🔍 Scanning X for latest AI news, hacks and hustles...')
+        update_job(job_id, {'progress': 5})
+
+        news_data = grok_find_ai_news(grok_key, categories)
+        if not news_data or not news_data.get('items'):
+            raise Exception('No AI news found — check Grok API key')
+
+        items = news_data['items'][:max_videos]
+        add_log(job_id, f'✅ Found {len(items)} stories to cover')
+        for item in items:
+            add_log(job_id, f'   • {item.get("title","")[:50]}')
+
+        produced_videos = []
+
+        for idx, item in enumerate(items):
+            add_log(job_id, f'\n📱 Story {idx+1}/{len(items)}: {item["title"]}')
+            update_job(job_id, {'progress': 10 + int((idx/len(items))*75)})
+
+            clip_path = None
+
+            if use_aurora and grok_key:
+                # Generate AI visuals with Aurora
+                add_log(job_id, f'   🎥 Generating Aurora visuals...')
+                aurora_path = f'{work_dir}/aurora_{idx}.mp4'
+                video_prompt = item.get('video_prompt',
+                    f'Futuristic tech visualization, AI interface, {item["title"]}, '
+                    f'cinematic 9:16, dark theme, glowing elements, professional')
+                if grok_generate_video(video_prompt, aurora_path, grok_key, 10, '9:16'):
+                    # Generate 3 clips and concatenate for 30s
+                    clips = [aurora_path]
+                    for ci in range(2):
+                        cp = f'{work_dir}/aurora_{idx}_{ci}.mp4'
+                        prompt2 = f'Tech AI visualization continuation, {item["title"]}, cinematic vertical'
+                        if grok_generate_video(prompt2, cp, grok_key, 10, '9:16'):
+                            clips.append(cp)
+                    final_clip = f'{work_dir}/combined_{idx}.mp4'
+                    if concatenate_clips(clips, final_clip):
+                        clip_path = final_clip
+                        add_log(job_id, f'   ✅ Aurora video generated ({len(clips)*10}s)')
+
+            if not clip_path:
+                # Fallback: search and download YouTube footage
+                add_log(job_id, f'   🔍 Finding footage for: {item.get("search_query",item["title"])}')
+                search_q = item.get('search_query', item['title'])
+                proxy = os.environ.get('PROXY_URL', '')
+                cmd = ['yt-dlp','--dump-json','--no-playlist','--no-warnings',
+                       '--flat-playlist','--extractor-args','youtube:player_client=web']
+                if proxy: cmd += ['--proxy', proxy]
+                cmd.append(f'ytsearch1:{search_q}')
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                vid_url = None
+                vid_id = None
+                for line in r.stdout.strip().split('\n'):
+                    if line.strip():
+                        try:
+                            info = json.loads(line)
+                            vid_id = info.get('id','')
+                            vid_url = info.get('webpage_url') or f'https://youtube.com/watch?v={vid_id}'
+                            break
+                        except: continue
+
+                if vid_url and vid_id:
+                    add_log(job_id, f'   ⬇️ Downloading footage...')
+                    dl_path = download_via_rapidapi(vid_url, work_dir, f'news_{idx}')
+                    if dl_path:
+                        # Cut a good clip from it
+                        cut_path = f'{work_dir}/cut_{idx}.mp4'
+                        try:
+                            dur = get_duration(dl_path)
+                            start = max(0, dur * 0.2)
+                            cut_vertical(dl_path, start, 30, cut_path, is_vertical(dl_path))
+                            clip_path = cut_path
+                        except: pass
+
+            if not clip_path:
+                add_log(job_id, f'   ⚠️ No footage — skipping')
+                continue
+
+            # Add narration
+            script_text = item.get('script', item.get('hook', item['title']))
+            add_log(job_id, f'   🎙️ Adding Grok narration...')
+            tts_path = f'{work_dir}/narr_{idx}.mp3'
+            if text_to_speech(script_text, tts_path):
+                narr_out = f'{work_dir}/narrated_{idx}.mp4'
+                if overlay_narration(clip_path, tts_path, narr_out):
+                    clip_path = narr_out
+
+            # Add music
+            if music_enabled:
+                music_out = f'{work_dir}/music_{idx}.mp4'
+                if add_trending_music(clip_path, music_out, 'dramatic', 0.15):
+                    clip_path = music_out
+
+            # Save final clip
+            final_path = f'{work_dir}/ainews_{idx}_{job_id[:6]}.mp4'
+            import shutil as _sh
+            _sh.copy2(clip_path, final_path)
+
+            # Upload to YouTube
+            yt_id = ''
+            if auto_upload and yt_token:
+                add_log(job_id, f'   📤 Posting to YouTube...')
+                desc = item.get('hook','') + '\n\n' + ' '.join(item.get('hashtags',['#AI','#Shorts']))
+                yt_id = upload_to_youtube(final_path, item['title'], desc,
+                                         item.get('hashtags',['#AI','#Shorts']), yt_token)
+                if yt_id:
+                    add_log(job_id, f'   ✅ Live: https://youtube.com/shorts/{yt_id}')
+
+            produced_videos.append({
+                'path': final_path,
+                'title': item['title'],
+                'category': item.get('category','ai'),
+                'why_viral': item.get('why_viral',''),
+                'affiliate': item.get('affiliate_angle',''),
+                'yt_id': yt_id
+            })
+            add_log(job_id, f'   ✅ Story {idx+1} complete')
+
+        if not produced_videos:
+            raise Exception('No videos produced')
+
+        # ZIP all videos
+        zip_name = f'{work_dir}/ainews_{job_id[:8]}.zip'
+        with zipfile.ZipFile(zip_name, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for v in produced_videos:
+                if os.path.exists(v['path']):
+                    zf.write(v['path'], os.path.basename(v['path']))
+
+        zip_size = os.path.getsize(zip_name) / (1024*1024)
+
+        add_log(job_id, f'\n{"="*35}')
+        add_log(job_id, f'🎉 AI News Studio done!')
+        add_log(job_id, f'   {len(produced_videos)} videos ready ({zip_size:.1f}MB)')
+        for v in produced_videos:
+            yt_link = f' → youtube.com/shorts/{v["yt_id"]}' if v.get('yt_id') else ''
+            add_log(job_id, f'   ✓ {v["title"][:45]}{yt_link}')
+
+        update_job(job_id, {
+            'status': 'done', 'progress': 100,
+            'completed_at': datetime.now().isoformat(),
+            'zip_path': zip_name,
+            'zip_size_mb': round(zip_size, 1),
+            'total_clips': len(produced_videos),
+            'videos': produced_videos
+        })
+
+    except Exception as e:
+        add_log(job_id, f'❌ Fatal error: {e}')
+        update_job(job_id, {'status': 'error', 'error': str(e)})
+
+
+def process_grok_original_video(job_id, params):
+    """Create fully AI-generated Short using Grok Aurora video + TTS.
+    3 x 10s clips assembled = 30s Short. No source video needed."""
+    work_dir = f'/tmp/grok_{job_id}'
+    os.makedirs(work_dir, exist_ok=True)
+    try:
+        update_job(job_id, {'status': 'processing', 'started_at': datetime.now().isoformat()})
+        topic = params.get('topic', '')
+        grok_key = os.environ.get('GROK_API_KEY', '') or params.get('grok_key', '')
+        num_clips = int(params.get('num_clips', 3))
+        clip_duration = int(params.get('clip_duration', 10))
+        music_enabled = params.get('music_enabled') == 'Yes'
+        music_style = params.get('music_style', 'energetic')
+        auto_upload = params.get('auto_upload') == 'Yes'
+        yt_token = params.get('yt_access_token', '')
+
+        if not grok_key:
+            raise Exception('Grok API key required')
+
+        add_log(job_id, f'⚡ Writing script for: "{topic}"...')
+        script = generate_ai_script(topic, num_clips, clip_duration, grok_key)
+        if not script:
+            raise Exception('Script generation failed')
+
+        add_log(job_id, f'📝 "{script["title"]}"')
+        add_log(job_id, f'   {len(script["points"])} scenes to generate')
+
+        assembled_clips = []
+
+        for idx, point in enumerate(script['points']):
+            add_log(job_id, f'\n🎬 Scene {idx+1}: {point["title"]}')
+            update_job(job_id, {'progress': 10 + int((idx / len(script['points'])) * 65)})
+
+            clip_path = f'{work_dir}/clip_{idx}.mp4'
+            video_prompt = (f'Cinematic 9:16 vertical video: {point["search_query"]}. '
+                          f'Dynamic, engaging, social media optimized, professional cinematography. '
+                          f'High contrast, dramatic lighting, smooth motion.')
+
+            add_log(job_id, f'   🎥 Generating {clip_duration}s AI video...')
+            if not grok_generate_video(video_prompt, clip_path, grok_key, clip_duration, '9:16'):
+                add_log(job_id, f'   ⚠️ Generation failed — skipping')
+                continue
+
+            # Add narration
+            if point.get('narration'):
+                add_log(job_id, f'   🎙️ Adding narration...')
+                tts_path = f'{work_dir}/narr_{idx}.mp3'
+                if text_to_speech(point['narration'], tts_path):
+                    narr_out = f'{work_dir}/narr_clip_{idx}.mp4'
+                    if overlay_narration(clip_path, tts_path, narr_out):
+                        clip_path = narr_out
+
+            assembled_clips.append(clip_path)
+            size = os.path.getsize(clip_path) / (1024*1024)
+            add_log(job_id, f'   ✅ Scene {idx+1} ready ({size:.1f}MB)')
+
+        if not assembled_clips:
+            raise Exception('No clips generated — check Grok API key and credits')
+
+        add_log(job_id, f'\n🎬 Assembling {len(assembled_clips)} scenes...')
+        update_job(job_id, {'progress': 80})
+        final_path = f'{work_dir}/xlab_ai_{job_id[:8]}.mp4'
+        if not concatenate_clips(assembled_clips, final_path):
+            raise Exception('Assembly failed')
+
+        if music_enabled:
+            add_log(job_id, f'🎵 Adding {music_style} music...')
+            music_out = final_path.replace('.mp4', '_music.mp4')
+            if add_trending_music(final_path, music_out, music_style, 0.2):
+                os.replace(music_out, final_path)
+
+        yt_id = ''
+        if auto_upload and yt_token:
+            add_log(job_id, '📤 Uploading to YouTube...')
+            update_job(job_id, {'progress': 92})
+            desc = script.get('hook','') + '\n\n' + ' '.join(script.get('hashtags',['#Shorts']))
+            yt_id = upload_to_youtube(final_path, script['title'], desc,
+                                      script.get('hashtags', ['#Shorts']), yt_token)
+            if yt_id:
+                add_log(job_id, f'   ✅ https://youtube.com/shorts/{yt_id}')
+
+        size = os.path.getsize(final_path) / (1024*1024)
+        zip_name = f'{work_dir}/grok_video_{job_id[:8]}.zip'
+        with zipfile.ZipFile(zip_name, 'w') as zf:
+            zf.write(final_path, os.path.basename(final_path))
+        zip_size = os.path.getsize(zip_name) / (1024*1024)
+
+        add_log(job_id, f'\n🎉 AI video ready! ({size:.1f}MB) — {len(assembled_clips)*clip_duration}s total')
+        update_job(job_id, {
+            'status': 'done', 'progress': 100,
+            'completed_at': datetime.now().isoformat(),
+            'zip_path': zip_name, 'zip_size_mb': round(zip_size, 1),
+            'total_clips': len(assembled_clips), 'yt_id': yt_id
+        })
+
+    except Exception as e:
+        add_log(job_id, f'❌ Fatal error: {e}')
+        update_job(job_id, {'status': 'error', 'error': str(e)})
 
 
 def text_to_speech(text, output_path):
@@ -832,23 +1258,42 @@ def download_via_rapidapi(video_url, output_dir, video_id):
         if not os.path.exists(temp_path) or os.path.getsize(temp_path) < 100000:
             return None
 
-        # Verify and remux to proper MP4 using ffmpeg
+        # Remux to proper MP4 — try multiple methods
+        remuxed = False
+
+        # Method 1: Simple copy remux
         result = subprocess.run([
             'ffmpeg', '-i', temp_path,
             '-c', 'copy', '-y', output_path,
             '-loglevel', 'quiet'
         ], capture_output=True, timeout=120)
 
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
+            remuxed = True
+        else:
+            # Method 2: Re-encode to fix corrupted container
+            result2 = subprocess.run([
+                'ffmpeg', '-i', temp_path,
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+                '-c:a', 'aac', '-b:a', '128k',
+                '-y', output_path, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=300)
+
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
+                remuxed = True
+            else:
+                # Method 3: Use the temp file directly as-is
+                import shutil
+                shutil.copy2(temp_path, output_path)
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
+                    remuxed = True
+
         # Clean up temp
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
+        if remuxed:
             return output_path
-
-        # If remux failed, try the temp file directly
-        if os.path.exists(temp_path.replace('.tmp', '')):
-            return temp_path.replace('.tmp', '')
 
     except Exception as e:
         logger.error(f'RapidAPI download error: {e}')
@@ -1519,6 +1964,54 @@ def get_formats():
     except Exception as e:
         logger.error(f'Format fetch error: {e}')
         return jsonify({'formats': [{'id': 'auto', 'label': 'Best available (auto)', 'ext': 'mp4'}]})
+
+
+@app.route('/api/ai-news', methods=['POST'])
+def create_ai_news():
+    params = request.json
+    job_id = str(uuid.uuid4())
+    update_job(job_id, {
+        'id': job_id, 'status': 'queued',
+        'created_at': datetime.now().isoformat(),
+        'progress': 0, 'logs': [],
+        'type': 'ai_news',
+        'topic': 'AI News Studio'
+    })
+    thread = threading.Thread(target=process_ai_news_studio, args=(job_id, params), daemon=True)
+    thread.start()
+    return jsonify({'job_id': job_id})
+
+
+@app.route('/api/grok-video', methods=['POST'])
+def create_grok_video():
+    params = request.json
+    job_id = str(uuid.uuid4())
+    update_job(job_id, {
+        'id': job_id, 'status': 'queued',
+        'created_at': datetime.now().isoformat(),
+        'progress': 0, 'logs': [],
+        'type': 'grok_video',
+        'topic': params.get('topic', '')
+    })
+    thread = threading.Thread(target=process_grok_original_video, args=(job_id, params), daemon=True)
+    thread.start()
+    return jsonify({'job_id': job_id})
+
+
+@app.route('/api/trending', methods=['POST'])
+def get_trending():
+    data = request.json
+    niche = data.get('niche', 'football')
+    grok_key = os.environ.get('GROK_API_KEY', '')
+    if not grok_key:
+        return jsonify({'topics': [], 'error': 'No Grok API key'})
+    try:
+        topics = grok_trending_topics(niche, grok_key)
+        if topics:
+            return jsonify(topics)
+        return jsonify({'topics': []})
+    except Exception as e:
+        return jsonify({'topics': [], 'error': str(e)})
 
 
 @app.route('/api/search', methods=['POST'])

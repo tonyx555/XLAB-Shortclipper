@@ -2479,6 +2479,33 @@ def stripe_webhook():
         return jsonify({'error': str(e)}), 400
 
 
+@app.route('/api/test-grok', methods=['GET'])
+def test_grok():
+    import requests as req
+    api_key = os.environ.get('GROK_API_KEY', '')
+    if not api_key:
+        return jsonify({'error': 'No GROK_API_KEY set'})
+    
+    results = {}
+    for model in ['grok-3', 'grok-2-1212', 'grok-beta', 'grok-4']:
+        try:
+            r = req.post(
+                'https://api.x.ai/v1/chat/completions',
+                headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+                json={'model': model, 'messages': [{'role': 'user', 'content': 'Say OK'}], 'max_tokens': 10},
+                timeout=15
+            )
+            data = r.json()
+            if 'choices' in data:
+                results[model] = '✅ ' + data['choices'][0]['message']['content']
+            else:
+                results[model] = '❌ ' + str(data)[:100]
+        except Exception as e:
+            results[model] = f'❌ {e}'
+    
+    return jsonify(results)
+
+
 @app.route('/api/keys/status', methods=['GET'])
 def keys_status():
     return jsonify({

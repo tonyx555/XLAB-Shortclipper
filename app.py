@@ -768,7 +768,7 @@ def download_via_rapidapi(video_url, output_dir, video_id):
         # Step 1: Get video details and download URLs
         r = req.get(
             'https://youtube-media-downloader.p.rapidapi.com/v2/video/details',
-            params={'videoId': vid_id},
+            params={'videoId': vid_id, 'videos': 'true', 'audios': 'false'},
             headers=headers,
             timeout=15
         )
@@ -811,16 +811,23 @@ def download_via_rapidapi(video_url, output_dir, video_id):
         output_path = os.path.join(output_dir, f'{video_id}.mp4')
         temp_path = output_path + '.tmp'
 
-        r2 = req.get(best_url, stream=True, timeout=300,
-                    headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Referer': 'https://www.youtube.com/',
-                    })
+        # Use wget for faster download — much faster than requests streaming
+        wget_result = subprocess.run([
+            'wget', '-q', '-O', temp_path,
+            '--timeout=60', '--tries=3',
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            best_url
+        ], capture_output=True, timeout=300)
 
-        with open(temp_path, 'wb') as f:
-            for chunk in r2.iter_content(chunk_size=65536):
-                if chunk:
-                    f.write(chunk)
+        if not os.path.exists(temp_path) or os.path.getsize(temp_path) < 100000:
+            # Fallback to requests if wget fails
+            r2 = req.get(best_url, stream=True, timeout=300,
+                        headers={'User-Agent': 'Mozilla/5.0'},
+                        allow_redirects=True)
+            with open(temp_path, 'wb') as f:
+                for chunk in r2.iter_content(chunk_size=1024*1024):  # 1MB chunks
+                    if chunk:
+                        f.write(chunk)
 
         if not os.path.exists(temp_path) or os.path.getsize(temp_path) < 100000:
             return None

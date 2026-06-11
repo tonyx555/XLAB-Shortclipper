@@ -1347,35 +1347,62 @@ def get_formats():
         cmd.append(url)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         
-        # Parse formats into clean list
         formats = []
+        seen_res = set()
+
         for line in result.stdout.split('\n'):
-            # Look for lines with format info
-            if any(q in line for q in ['1080', '720', '480', '360', '240']) and ('mp4' in line or 'webm' in line):
-                parts = line.split()
-                if len(parts) >= 3:
-                    fmt_id = parts[0]
-                    ext = parts[1] if len(parts) > 1 else 'mp4'
-                    # Get resolution
-                    res = next((p for p in parts if 'x' in p or 'p' in p.lower()), '')
-                    label = f"{res} {ext}".strip()
-                    if fmt_id and label:
-                        formats.append({'id': fmt_id, 'label': label, 'ext': ext})
-        
-        # Remove duplicates, keep best per resolution
-        seen = set()
-        unique = []
-        for f in formats:
-            key = f['label']
-            if key not in seen:
-                seen.add(key)
-                unique.append(f)
-        
-        # Always add 'best' option
-        unique = [{'id': 'best', 'label': 'Best available (auto)', 'ext': 'mp4'}] + unique[:8]
-        return jsonify({'formats': unique})
+            line = line.strip()
+            if not line or line.startswith('ID') or line.startswith('-') or line.startswith('['):
+                continue
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            
+            fmt_id = parts[0]
+            ext = parts[1] if len(parts) > 1 else ''
+            
+            # Find resolution in the line
+            res = ''
+            for p in parts:
+                if 'x' in p and p.replace('x','').replace('0123456789','').strip() == '':
+                    res = p
+                    break
+                if p.endswith('p') and p[:-1].isdigit():
+                    res = p
+                    break
+            
+            # Build label
+            if res and ext in ('mp4', 'webm', 'm4a', 'avc1', 'av01'):
+                key = f"{res}_{ext}"
+                if key not in seen_res:
+                    seen_res.add(key)
+                    size_info = ''
+                    for p in parts:
+                        if 'MiB' in p or 'KiB' in p or 'GiB' in p:
+                            size_info = f' ~{p}'
+                            break
+                    formats.append({
+                        'id': fmt_id,
+                        'label': f'{res} {ext.upper()}{size_info}',
+                        'ext': ext
+                    })
+
+        # Sort by resolution descending
+        def res_sort(f):
+            label = f['label']
+            for q in ['2160','1440','1080','720','480','360','240','144']:
+                if q in label:
+                    return int(q)
+            return 0
+        formats.sort(key=res_sort, reverse=True)
+
+        # Always add auto option first
+        options = [{'id': 'auto', 'label': 'Best available (auto)', 'ext': 'mp4'}] + formats[:8]
+        logger.info(f'Formats for {url}: {[f["label"] for f in options]}')
+        return jsonify({'formats': options})
     except Exception as e:
-        return jsonify({'formats': [{'id': 'best', 'label': 'Best available (auto)', 'ext': 'mp4'}]})
+        logger.error(f'Format fetch error: {e}')
+        return jsonify({'formats': [{'id': 'auto', 'label': 'Best available (auto)', 'ext': 'mp4'}]})
 
 
 @app.route('/api/search', methods=['POST'])

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>XLAB — Login</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+body { background: #000; color: #e8e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.container { width: 100%; max-width: 380px; }
+.logo { text-align: center; margin-bottom: 32px; }
+.logo-text { font-size: 32px; font-weight: 900; letter-spacing: -1.5px; }
+.logo-text span { color: #e63329; }
+.logo-sub { font-size: 12px; color: #444; margin-top: 6px; letter-spacing: 0.5px; text-transform: uppercase; }
+.card { background: #0d0d0d; border: 1px solid #1e1e1e; border-radius: 16px; padding: 28px; }
+.tabs { display: flex; gap: 0; margin-bottom: 24px; background: #111; border-radius: 10px; padding: 3px; }
+.tab { flex: 1; padding: 9px; border-radius: 8px; border: none; background: none; color: #555; font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit; transition: all 0.15s; }
+.tab.active { background: #1a1a1a; color: #e8e8f0; }
+.field { margin-bottom: 14px; }
+.field label { display: block; font-size: 11px; color: #444; font-weight: 600; margin-bottom: 6px; }
+.field input { width: 100%; background: #0a0a0a; border: 1px solid #1e1e1e; border-radius: 10px; padding: 12px 14px; color: #e8e8f0; font-size: 14px; font-family: inherit; outline: none; transition: border-color 0.15s; }
+.field input:focus { border-color: rgba(230,51,41,0.4); }
+.btn { width: 100%; padding: 13px; border-radius: 12px; border: none; font-size: 15px; font-weight: 700; cursor: pointer; font-family: inherit; transition: opacity 0.15s; }
+.btn-red { background: linear-gradient(135deg, #ff4438, #c42820); color: white; box-shadow: 0 4px 20px rgba(230,51,41,0.3); }
+.btn-red:hover { opacity: 0.9; }
+.error { color: #ff6b5b; font-size: 12px; margin-bottom: 14px; display: none; padding: 8px 12px; background: rgba(230,51,41,0.08); border-radius: 8px; border: 1px solid rgba(230,51,41,0.2); }
+.divider { text-align: center; color: #333; font-size: 12px; margin: 16px 0; }
+.btn-ghost { background: #111; border: 1px solid #222; color: #666; margin-top: 10px; }
+.plans { margin-top: 24px; }
+.plan-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; padding: 14px; margin-bottom: 8px; }
+.plan-card.popular { border-color: rgba(230,51,41,0.3); background: rgba(230,51,41,0.04); }
+.plan-name { font-size: 13px; font-weight: 700; color: #e8e8f0; }
+.plan-price { font-size: 20px; font-weight: 900; color: #fff; margin: 4px 0; }
+.plan-price span { font-size: 12px; color: #555; font-weight: 400; }
+.plan-features { font-size: 11px; color: #555; line-height: 1.8; }
+footer-note { display: block; text-align: center; font-size: 11px; color: #333; margin-top: 20px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="logo">
+    <div class="logo-text">X<span>LAB</span></div>
+    <div class="logo-sub">Auto-clip · Auto-post · Grow on autopilot</div>
+  </div>
+
+  <div class="card">
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('login')">Sign in</button>
+      <button class="tab" onclick="switchTab('register')">Create account</button>
+    </div>
+
+    <div id="errorMsg" class="error"></div>
+
+    <!-- Login form -->
+    <div id="loginForm">
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="loginEmail" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <button class="btn btn-red" onclick="login()">Sign in →</button>
+      <div class="divider">or</div>
+      <button class="btn btn-ghost" onclick="guestAccess()">Continue as guest</button>
+    </div>
+
+    <!-- Register form -->
+    <div id="registerForm" style="display:none">
+      <div class="field">
+        <label>Name</label>
+        <input type="text" id="regName" placeholder="Your name">
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="regEmail" placeholder="you@example.com">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="regPassword" placeholder="Choose a strong password">
+      </div>
+      <button class="btn btn-red" onclick="register()">Create account →</button>
+      <div class="divider">Free plan — no credit card needed</div>
+    </div>
+  </div>
+
+  <!-- Plans preview -->
+  <div class="plans">
+    <div style="font-size:11px;color:#333;text-align:center;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px">Plans</div>
+    <div class="plan-card">
+      <div class="plan-name">Free</div>
+      <div class="plan-price">$0 <span>/month</span></div>
+      <div class="plan-features">3 videos/month · 1 channel · YouTube clips</div>
+    </div>
+    <div class="plan-card popular">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div class="plan-name">Pro</div>
+        <span style="background:rgba(230,51,41,0.15);color:#ff6b5b;font-size:9px;font-weight:700;padding:2px 8px;border-radius:4px">POPULAR</span>
+      </div>
+      <div class="plan-price">$29 <span>/month</span></div>
+      <div class="plan-features">100 videos · 3 channels · AI News · Grok voice</div>
+    </div>
+    <div class="plan-card">
+      <div class="plan-name">Agency</div>
+      <div class="plan-price">$99 <span>/month</span></div>
+      <div class="plan-features">Unlimited everything · White label · API access</div>
+    </div>
+  </div>
+
+  <span footer-note>By continuing you agree to our Terms of Service</span>
+</div>
+
+<script>
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', (tab==='login' && i===0) || (tab==='register' && i===1)));
+  document.getElementById('loginForm').style.display = tab === 'login' ? 'block' : 'none';
+  document.getElementById('registerForm').style.display = tab === 'register' ? 'block' : 'none';
+  document.getElementById('errorMsg').style.display = 'none';
+}
+
+function showError(msg) {
+  const el = document.getElementById('errorMsg');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+async function login() {
+  const email = document.getElementById('loginEmail').value;
+  const password = document.getElementById('loginPassword').value;
+  if (!email || !password) { showError('Enter email and password'); return; }
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email, password})
+    });
+    const data = await r.json();
+    if (data.error) { showError(data.error); return; }
+    localStorage.setItem('xlab_token', data.token);
+    localStorage.setItem('xlab_user', JSON.stringify(data.user));
+    window.location.href = '/';
+  } catch(e) {
+    showError('Connection error — try again');
+  }
+}
+
+async function register() {
+  const name = document.getElementById('regName').value;
+  const email = document.getElementById('regEmail').value;
+  const password = document.getElementById('regPassword').value;
+  if (!email || !password) { showError('Email and password required'); return; }
+  try {
+    const r = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, email, password})
+    });
+    const data = await r.json();
+    if (data.error) { showError(data.error); return; }
+    localStorage.setItem('xlab_token', data.token);
+    localStorage.setItem('xlab_user', JSON.stringify(data.user));
+    window.location.href = '/';
+  } catch(e) {
+    showError('Connection error — try again');
+  }
+}
+
+function guestAccess() {
+  localStorage.setItem('xlab_token', 'guest');
+  localStorage.setItem('xlab_user', JSON.stringify({email:'guest', plan:'free', name:'Guest'}));
+  window.location.href = '/';
+}
+
+// Enter key support
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const loginVisible = document.getElementById('loginForm').style.display !== 'none';
+    if (loginVisible) login(); else register();
+  }
+});
+</script>
+</body>
+</html>

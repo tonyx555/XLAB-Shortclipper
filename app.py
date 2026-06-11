@@ -615,7 +615,22 @@ def grok_generate_video(prompt, output_path, api_key, duration=10, aspect_ratio=
                             if chunk: f.write(chunk)
                     size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
                     logger.info(f'Aurora downloaded: {size/1024:.0f}KB')
-                    return size > 10000
+                    if size > 10000:
+                        # Re-encode for iPhone/mobile compatibility
+                        compat_path = output_path + '.compat.mp4'
+                        result = subprocess.run([
+                            'ffmpeg', '-i', output_path,
+                            '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+                            '-c:a', 'aac', '-b:a', '128k',
+                            '-movflags', '+faststart',
+                            '-pix_fmt', 'yuv420p',
+                            '-y', compat_path, '-loglevel', 'quiet'
+                        ], capture_output=True, timeout=120)
+                        if os.path.exists(compat_path) and os.path.getsize(compat_path) > 10000:
+                            os.replace(compat_path, output_path)
+                            logger.info('Aurora re-encoded for iPhone compatibility')
+                        return True
+                    return False
                 logger.error(f'Aurora done but no URL: {result}')
                 return False
             elif status in ('failed', 'cancelled', 'error'):

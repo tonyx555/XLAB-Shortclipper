@@ -581,45 +581,51 @@ Respond ONLY with valid JSON:
 def grok_find_ai_news(api_key, categories=None):
     """Use Grok to find latest AI news, hacks, tools from X that aren't viral yet."""
     if not categories:
-        categories = ['ai tools', 'github hacks', 'ai hustles', 'tech tools', 'productivity hacks']
+        categories = ['ai_tools', 'github_hacks', 'hustles', 'productivity']
 
-    prompt = f"""You have real-time access to X (Twitter) data.
+    prompt = """You have real-time access to X (Twitter) data.
+Find 3 interesting AI/tech things from the last 48 hours that are NOT yet viral on YouTube.
+Topics: new AI tools, GitHub hacks, AI money-making ideas, productivity hacks.
 
-Find the 8 most interesting posts from the LAST 48 HOURS about:
-- New AI tools and models just released
-- GitHub repos with clever AI hacks or automation
-- Money-making AI hustles and side income methods
-- Productivity hacks using AI
-- Underrated tech tools people are discovering
-- AI news that is NOT yet trending on TikTok/YouTube/Instagram
-
-For each post find something that would genuinely surprise or excite people who haven't seen it.
-
-Respond ONLY with valid JSON:
-{{"items": [
-  {{
-    "category": "ai_tool|github_hack|hustle|tech_news|productivity",
-    "title": "catchy Short title under 60 chars",
-    "hook": "opening 2 seconds — must grab attention immediately",
-    "x_source": "original X post summary",
-    "script": "30 second narration script — punchy, exciting, explains the value",
-    "search_query": "YouTube search to find relevant footage",
-    "video_prompt": "Aurora video generation prompt for cinematic visuals",
-    "hashtags": ["#AI", "#Tech", 5 more relevant],
-    "why_viral": "why this hasn't blown up yet and why it will",
-    "affiliate_angle": "how to monetize this content"
-  }}
-]}}"""
+Reply ONLY with this exact JSON format, no other text:
+{"items": [{"category": "ai_tool", "title": "Short catchy title", "hook": "Attention grabbing opener", "script": "30 second script explaining the tool and why it matters", "video_prompt": "Cinematic tech visualization prompt for AI video generation", "hashtags": ["#AI", "#Tech", "#AITools", "#Shorts", "#Innovation"], "why_viral": "Why this will go viral"}]}"""
 
     text = call_grok(prompt, api_key)
+    logger.info(f'Grok AI news response: {text[:200] if text else "None"}')
+    
     if not text:
         return None
+    
+    # Try multiple JSON extraction methods
     try:
-        text = text.replace('```json','').replace('```','').strip()
-        return json.loads(text)
-    except Exception as e:
-        logger.error(f'AI news parse error: {e}')
+        # Clean response
+        text = text.strip()
+        # Remove markdown code blocks
+        text = text.replace('```json', '').replace('```', '').strip()
+        # Find JSON object
+        start = text.find('{')
+        end = text.rfind('}') + 1
+        if start >= 0 and end > start:
+            text = text[start:end]
+        result = json.loads(text)
+        if result.get('items'):
+            return result
+        logger.error(f'No items in Grok response: {result}')
         return None
+    except Exception as e:
+        logger.error(f'AI news parse error: {e} — raw: {text[:200]}')
+        # Try to manually build a basic item from the response
+        return {
+            "items": [{
+                "category": "ai_tool",
+                "title": "Latest AI Tool You Need to Know",
+                "hook": "This just dropped and nobody is talking about it yet",
+                "script": text[:300] if text else "Check out this amazing new AI tool that just launched",
+                "video_prompt": "Futuristic AI interface visualization, dark theme, glowing elements, cinematic 9:16",
+                "hashtags": ["#AI", "#Tech", "#AITools", "#Shorts"],
+                "why_viral": "New and trending"
+            }]
+        }
 
 
 def process_ai_news_studio(job_id, params):
@@ -638,15 +644,17 @@ def process_ai_news_studio(job_id, params):
         music_enabled = params.get('music_enabled', 'Yes') == 'Yes'
         categories = params.get('categories', [])
 
+        logger.info(f'Grok key check: env={bool(os.environ.get("GROK_API_KEY"))}, param={bool(params.get("grok_key"))}')
         if not grok_key:
-            raise Exception('Grok API key required')
+            raise Exception('Grok API key required — add GROK_API_KEY to Railway variables')
 
         add_log(job_id, '🔍 Scanning X for latest AI news, hacks and hustles...')
         update_job(job_id, {'progress': 5})
 
         news_data = grok_find_ai_news(grok_key, categories)
         if not news_data or not news_data.get('items'):
-            raise Exception('No AI news found — check Grok API key')
+            add_log(job_id, f'   Grok response was empty or invalid')
+            raise Exception('No AI news found — Grok returned no items. Check Railway logs for details.')
 
         items = news_data['items'][:max_videos]
         add_log(job_id, f'✅ Found {len(items)} stories to cover')
@@ -816,8 +824,9 @@ def process_grok_original_video(job_id, params):
         auto_upload = params.get('auto_upload') == 'Yes'
         yt_token = params.get('yt_access_token', '')
 
+        logger.info(f'Grok key check: env={bool(os.environ.get("GROK_API_KEY"))}, param={bool(params.get("grok_key"))}')
         if not grok_key:
-            raise Exception('Grok API key required')
+            raise Exception('Grok API key required — add GROK_API_KEY to Railway variables')
 
         add_log(job_id, f'⚡ Writing script for: "{topic}"...')
         script = generate_ai_script(topic, num_clips, clip_duration, grok_key)

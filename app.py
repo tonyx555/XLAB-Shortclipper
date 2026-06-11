@@ -2386,6 +2386,17 @@ def stripe_webhook():
         return jsonify({'error': str(e)}), 400
 
 
+@app.route('/api/keys/status', methods=['GET'])
+def keys_status():
+    return jsonify({
+        'grok': bool(os.environ.get('GROK_API_KEY')),
+        'rapidapi': bool(os.environ.get('RAPIDAPI_KEY')),
+        'proxy': bool(os.environ.get('PROXY_URL')),
+        'x': bool(os.environ.get('X_API_KEY')),
+        'stripe': bool(os.environ.get('STRIPE_SECRET_KEY')),
+    })
+
+
 @app.route('/api/trending', methods=['POST'])
 def get_trending():
     data = request.json

@@ -482,18 +482,29 @@ def call_grok(prompt, api_key):
     import requests as req
     if not api_key:
         return None
-    try:
-        r = req.post(
-            'https://api.x.ai/v1/chat/completions',
-            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
-            json={'model': 'grok-2-latest', 'messages': [{'role': 'user', 'content': prompt}],
-                  'max_tokens': 2000, 'temperature': 0.7},
-            timeout=30
-        )
-        return r.json()['choices'][0]['message']['content']
-    except Exception as e:
-        logger.error(f'Grok error: {e}')
-        return None
+    for model in ['grok-3', 'grok-2-1212', 'grok-beta']:
+        try:
+            r = req.post(
+                'https://api.x.ai/v1/chat/completions',
+                headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+                json={'model': model, 'messages': [{'role': 'user', 'content': prompt}],
+                      'max_tokens': 2000, 'temperature': 0.7},
+                timeout=30
+            )
+            data = r.json()
+            logger.info(f'Grok model {model} response keys: {list(data.keys())}')
+            if 'choices' in data:
+                return data['choices'][0]['message']['content']
+            elif 'error' in data:
+                logger.error(f'Grok {model} error: {data["error"]}')
+                continue
+            else:
+                logger.error(f'Grok {model} unexpected: {str(data)[:100]}')
+                continue
+        except Exception as e:
+            logger.error(f'Grok {model} exception: {e}')
+            continue
+    return None
 
 
 def grok_tts(text, output_path, api_key, voice='ara'):
@@ -578,17 +589,90 @@ Respond ONLY with valid JSON:
         return None
 
 
+def search_x_for_ai_news(categories=None):
+    """Search X API for real trending AI posts from last 24hrs."""
+    import requests as req
+    from datetime import datetime, timedelta, timezone
+
+    bearer = os.environ.get('X_BEARER_TOKEN', '') or os.environ.get('X_API_KEY', '')
+    if not bearer:
+        logger.warning('No X Bearer Token — skipping X search')
+        return []
+
+    queries = {
+        'ai_tools': 'new AI tool launched -is:retweet lang:en',
+        'github_hacks': 'github AI automation -is:retweet lang:en',
+        'hustles': 'make money AI -is:retweet lang:en',
+        'productivity': 'AI productivity hack -is:retweet lang:en',
+        'tech_news': 'AI just released -is:retweet lang:en',
+    }
+
+    if not categories:
+        categories = list(queries.keys())
+
+    start_time = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    posts = []
+
+    for cat in categories[:3]:  # max 3 categories to stay in free tier
+        query = queries.get(cat, 'new AI tool -is:retweet lang:en')
+        try:
+            r = req.get(
+                'https://api.twitter.com/2/tweets/search/recent',
+                headers={'Authorization': f'Bearer {bearer}'},
+                params={
+                    'query': query,
+                    'max_results': 10,
+                    'start_time': start_time,
+                    'tweet.fields': 'public_metrics,created_at,text',
+                    'expansions': 'author_id',
+                    'user.fields': 'username,public_metrics'
+                },
+                timeout=15
+            )
+            data = r.json()
+            if 'data' in data:
+                # Sort by engagement
+                tweets = sorted(data['data'],
+                    key=lambda t: t.get('public_metrics', {}).get('like_count', 0),
+                    reverse=True)
+                for t in tweets[:2]:  # top 2 per category
+                    posts.append({
+                        'category': cat,
+                        'text': t.get('text', ''),
+                        'likes': t.get('public_metrics', {}).get('like_count', 0),
+                        'retweets': t.get('public_metrics', {}).get('retweet_count', 0),
+                    })
+            elif 'errors' in data:
+                logger.error(f'X API error for {cat}: {data["errors"]}')
+        except Exception as e:
+            logger.error(f'X search error for {cat}: {e}')
+
+    logger.info(f'X search found {len(posts)} posts')
+    return posts
+
+
 def grok_find_ai_news(api_key, categories=None):
     """Use Grok to find latest AI news, hacks, tools from X that aren't viral yet."""
     if not categories:
         categories = ['ai_tools', 'github_hacks', 'hustles', 'productivity']
 
-    prompt = """You have real-time access to X (Twitter) data.
-Find 3 interesting AI/tech things from the last 48 hours that are NOT yet viral on YouTube.
-Topics: new AI tools, GitHub hacks, AI money-making ideas, productivity hacks.
+    # First get real X posts as context
+    x_posts = search_x_for_ai_news(categories)
+    x_context = ""
+    if x_posts:
+        x_context = "\n\nReal trending X posts from last 48hrs:\n"
+        for p in x_posts[:6]:
+            x_context += f"- [{p['category']}] {p['text'][:150]} (likes:{p['likes']})\n"
+        logger.info(f'Using {len(x_posts)} real X posts as context')
+    else:
+        x_context = "\n\n(No X posts available - use your knowledge of recent AI news)"
 
-Reply ONLY with this exact JSON format, no other text:
-{"items": [{"category": "ai_tool", "title": "Short catchy title", "hook": "Attention grabbing opener", "script": "30 second script explaining the tool and why it matters", "video_prompt": "Cinematic tech visualization prompt for AI video generation", "hashtags": ["#AI", "#Tech", "#AITools", "#Shorts", "#Innovation"], "why_viral": "Why this will go viral"}]}"""
+    prompt = """Based on these real X posts and your knowledge of recent AI news, create 3 YouTube Short scripts.
+Each should be about something NOT yet viral on YouTube/TikTok.
+""" + x_context + """
+
+Reply ONLY with this exact JSON, no other text:
+{"items": [{"category": "ai_tool", "title": "Short catchy title under 60 chars", "hook": "Attention grabbing first line", "script": "Punchy 30 second narration script", "video_prompt": "Cinematic tech visualization for AI video, dark theme, 9:16 vertical", "hashtags": ["#AI", "#Tech", "#AITools", "#Shorts"], "why_viral": "Why this will get views"}]}"""
 
     text = call_grok(prompt, api_key)
     logger.info(f'Grok AI news response: {text[:200] if text else "None"}')

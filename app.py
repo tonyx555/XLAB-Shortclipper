@@ -447,6 +447,245 @@ Respond ONLY with valid JSON, no markdown:
         }
 
 
+def fetch_github_images(repo_url):
+    """Fetch demo images and GIFs from a GitHub repo README."""
+    import requests as req
+    import re
+
+    try:
+        # Extract owner/repo from URL
+        match = re.search(r'github\.com/([^/]+/[^/\s]+)', repo_url)
+        if not match:
+            return []
+        repo = match.group(1).rstrip('/')
+
+        # Fetch README via GitHub API
+        r = req.get(
+            f'https://api.github.com/repos/{repo}/readme',
+            headers={'Accept': 'application/vnd.github.raw'},
+            timeout=10
+        )
+        if r.status_code != 200:
+            return []
+
+        readme = r.text
+        images = []
+
+        # Find all image URLs in README
+        # Match markdown images ![...](url)
+        for match in re.finditer(r'!\[.*?\]\((https?://[^\)]+)\)', readme):
+            url = match.group(1)
+            if any(ext in url.lower() for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']):
+                images.append(url)
+
+        # Also find raw GitHub image URLs
+        for match in re.finditer(r'(https://(?:raw\.githubusercontent\.com|github\.com/[^/]+/[^/]+/(?:raw|blob))/[^\s\)"]+\.(?:png|jpg|gif|jpeg))', readme):
+            url = match.group(1).replace('/blob/', '/raw/')
+            if url not in images:
+                images.append(url)
+
+        logger.info(f'GitHub images found for {repo}: {len(images)}')
+        return images[:6]  # max 6 images
+
+    except Exception as e:
+        logger.error(f'GitHub image fetch error: {e}')
+        return []
+
+
+def fetch_best_visuals(item, work_dir, idx):
+    """Get the best visuals for an AI news item — tries multiple sources."""
+    import requests as req
+
+    # Source 1: YouTube demo
+    search_q = item.get('search_query', item['title']) + ' demo tutorial'
+    proxy = os.environ.get('PROXY_URL', '')
+    try:
+        cmd = ['yt-dlp', '--dump-json', '--no-playlist', '--no-warnings',
+               '--extractor-args', 'youtube:player_client=android,ios',
+               f'ytsearch3:{search_q}']
+        if proxy: cmd += ['--proxy', proxy]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        for line in r.stdout.strip().split('\n'):
+            if line.strip():
+                try:
+                    info = json.loads(line)
+                    dur = info.get('duration', 0)
+                    if 30 <= dur <= 600:
+                        vid_url = info.get('webpage_url') or f'https://youtube.com/watch?v={info.get("id","")}'
+                        dl_path = download_via_rapidapi(vid_url, work_dir, f'news_{idx}')
+                        if dl_path:
+                            cut_path = f'{work_dir}/cut_{idx}.mp4'
+                            video_dur = get_duration(dl_path)
+                            start = max(0, video_dur * 0.2)
+                            cut_vertical(dl_path, start, 30, cut_path, is_vertical(dl_path))
+                            if os.path.exists(cut_path) and os.path.getsize(cut_path) > 100000:
+                                return cut_path, 'youtube'
+                except: continue
+    except Exception as e:
+        logger.error(f'YouTube search error: {e}')
+
+    # Source 2: X post images
+    x_images = item.get('images', [])
+    if x_images:
+        img_vid = f'{work_dir}/ximg_{idx}.mp4'
+        if create_video_from_images(x_images, img_vid):
+            return img_vid, 'x_images'
+
+    # Source 3: GitHub README images
+    text = item.get('script', '') + item.get('hook', '') + item.get('x_source', '')
+    github_match = __import__('re').search(r'github\.com/[^\s\)"]+', text)
+    if github_match:
+        github_url = 'https://' + github_match.group(0)
+        gh_images = fetch_github_images(github_url)
+        if gh_images:
+            gh_vid = f'{work_dir}/ghimg_{idx}.mp4'
+            if create_video_from_images(gh_images, gh_vid):
+                return gh_vid, 'github'
+
+    return None, None
+
+
+def create_video_from_images(image_urls, output_path, duration_each=8):
+    """Create a video from X post images using Ken Burns effect (zoom/pan).
+    Each image gets animated to create engaging motion."""
+    import requests as req
+    import tempfile
+
+    if not image_urls:
+        return False
+
+    try:
+        work_dir = tempfile.mkdtemp()
+        img_paths = []
+
+        # Download images
+        for i, url in enumerate(image_urls[:4]):
+            try:
+                r = req.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+                if r.status_code == 200:
+                    ext = 'jpg' if 'jpg' in url or 'jpeg' in url else 'png'
+                    img_path = os.path.join(work_dir, f'img_{i}.{ext}')
+                    with open(img_path, 'wb') as f:
+                        f.write(r.content)
+                    img_paths.append(img_path)
+            except Exception as e:
+                logger.error(f'Image download error: {e}')
+
+        if not img_paths:
+            return False
+
+        # Create video clips from each image with Ken Burns effect
+        clip_paths = []
+        for i, img_path in enumerate(img_paths):
+            clip_path = os.path.join(work_dir, f'clip_{i}.mp4')
+            # Ken Burns: slow zoom in effect
+            vf = (
+                f"scale=1080:1920:force_original_aspect_ratio=increase,"
+                f"crop=1080:1920,"
+                f"zoompan=z='min(zoom+0.0015,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+                f":d={duration_each*25}:s=1080x1920:fps=25"
+            )
+            result = subprocess.run([
+                'ffmpeg', '-loop', '1', '-i', img_path,
+                '-vf', vf,
+                '-t', str(duration_each),
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                '-pix_fmt', 'yuv420p',
+                '-y', clip_path, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=60)
+            if os.path.exists(clip_path) and os.path.getsize(clip_path) > 10000:
+                clip_paths.append(clip_path)
+
+        if not clip_paths:
+            return False
+
+        # Concatenate all image clips
+        return concatenate_clips(clip_paths, output_path)
+
+    except Exception as e:
+        logger.error(f'Image video creation error: {e}')
+        return False
+
+
+def add_text_overlays(video_path, output_path, title, hook, key_points=None, cta="Follow for daily AI tools"):
+    """Add TikTok-style text overlays to video using ffmpeg drawtext."""
+    try:
+        # Build drawtext filters
+        filters = []
+        
+        # Hook text — bold, top of screen, first 5 seconds
+        safe_hook = re.sub(r"[':]", '', hook[:60])[:60]
+        filters.append(
+            f"drawtext=text='{safe_hook}':"
+            f"fontsize=42:fontcolor=white:fontweight=bold:"
+            f"x=(w-text_w)/2:y=h*0.12:"
+            f"box=1:boxcolor=black@0.6:boxborderw=8:"
+            f"enable='between(t,0,4)'"
+        )
+        
+        # Title — middle of screen, seconds 1-3
+        safe_title = re.sub(r"[':]", '', title[:50])[:60]
+        filters.append(
+            f"drawtext=text='{safe_title}':"
+            f"fontsize=36:fontcolor=yellow:fontweight=bold:"
+            f"x=(w-text_w)/2:y=h*0.45:"
+            f"box=1:boxcolor=black@0.5:boxborderw=6:"
+            f"enable='between(t,1,3)'"
+        )
+        
+        # Key points — appear mid video
+        if key_points:
+            for i, point in enumerate(key_points[:3]):
+                safe_point = re.sub(r"[':]", '', point[:50])[:60]
+                t_start = 5 + (i * 7)
+                t_end = t_start + 6
+                filters.append(
+                    f"drawtext=text='{safe_point}':"
+                    f"fontsize=34:fontcolor=white:fontweight=bold:"
+                    f"x=(w-text_w)/2:y=h*0.75:"
+                    f"box=1:boxcolor=black@0.65:boxborderw=8:"
+                    f"enable='between(t,{t_start},{t_end})'"
+                )
+        
+        # CTA — last 4 seconds
+        safe_cta = re.sub(r"[':]", '', cta[:50])[:60]
+        filters.append(
+            f"drawtext=text='{safe_cta}':"
+            f"fontsize=36:fontcolor=white:fontweight=bold:"
+            f"x=(w-text_w)/2:y=h*0.82:"
+            f"box=1:boxcolor=rgba(230\,51\,41\,0.85):boxborderw=12:"
+            f"enable='gte(t,26)'"
+        )
+        
+        # XLAB watermark
+        filters.append(
+            "drawtext=text='XLAB':"
+            "fontsize=22:fontcolor=white:alpha=0.4:"
+            "x=w-tw-16:y=16:fontweight=bold"
+        )
+        
+        vf = ','.join(filters)
+        
+        result = subprocess.run([
+            'ffmpeg', '-i', video_path,
+            '-vf', vf,
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-c:a', 'copy',
+            '-movflags', '+faststart',
+            '-y', output_path, '-loglevel', 'quiet'
+        ], capture_output=True, timeout=120)
+        
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
+            logger.info(f'Text overlays added successfully')
+            return True
+        else:
+            logger.error(f'Text overlay failed: {result.stderr[:200]}')
+            return False
+    except Exception as e:
+        logger.error(f'Text overlay error: {e}')
+        return False
+
+
 def post_to_x(video_path, text, api_key, api_secret, access_token, access_token_secret):
     """Post video to X (Twitter) using tweepy — free tier supports 1500 posts/month."""
     try:
@@ -692,8 +931,9 @@ def search_x_for_ai_news(categories=None):
                     'query': query,
                     'max_results': 10,
                     'start_time': start_time,
-                    'tweet.fields': 'public_metrics,created_at,text',
-                    'expansions': 'author_id',
+                    'tweet.fields': 'public_metrics,created_at,text,attachments',
+                    'expansions': 'author_id,attachments.media_keys',
+                    'media.fields': 'url,preview_image_url,type',
                     'user.fields': 'username,public_metrics'
                 },
                 timeout=15
@@ -704,12 +944,21 @@ def search_x_for_ai_news(categories=None):
                 tweets = sorted(data['data'],
                     key=lambda t: t.get('public_metrics', {}).get('like_count', 0),
                     reverse=True)
+                # Build media lookup from includes
+                media_lookup = {}
+                for m in data.get('includes', {}).get('media', []):
+                    media_lookup[m['media_key']] = m.get('url') or m.get('preview_image_url', '')
+
                 for t in tweets[:2]:  # top 2 per category
+                    # Get image URLs from tweet
+                    media_keys = t.get('attachments', {}).get('media_keys', [])
+                    images = [media_lookup[k] for k in media_keys if k in media_lookup and media_lookup[k]]
                     posts.append({
                         'category': cat,
                         'text': t.get('text', ''),
                         'likes': t.get('public_metrics', {}).get('like_count', 0),
                         'retweets': t.get('public_metrics', {}).get('retweet_count', 0),
+                        'images': images,
                     })
             elif 'errors' in data:
                 logger.error(f'X API error for {cat}: {data["errors"]}')
@@ -731,7 +980,8 @@ def grok_find_ai_news(api_key, categories=None):
     if x_posts:
         x_context = "\n\nReal trending X posts from last 48hrs:\n"
         for p in x_posts[:6]:
-            x_context += f"- [{p['category']}] {p['text'][:150]} (likes:{p['likes']})\n"
+            img_note = f" [has {len(p.get('images',[]))} images]" if p.get('images') else ""
+            x_context += f"- [{p['category']}] {p['text'][:150]} (likes:{p['likes']}){img_note}\n"
         logger.info(f'Using {len(x_posts)} real X posts as context')
     else:
         x_context = "\n\n(No X posts available - use your knowledge of recent AI news)"
@@ -741,10 +991,12 @@ Each should be about something NOT yet viral on YouTube/TikTok.
 """ + x_context + """
 
 Reply ONLY with this exact JSON, no other text:
-{"items": [{"category": "ai_tool", "title": "Short catchy title under 60 chars", "hook": "Attention grabbing first line", "script": "Punchy 30 second narration script", "video_prompt": "Cinematic tech visualization for AI video, dark theme, 9:16 vertical", "hashtags": ["#AI", "#Tech", "#AITools", "#Shorts"], "why_viral": "Why this will get views"}]}"""
+{"items": [{"category": "ai_tool", "title": "Short catchy title under 60 chars", "hook": "Attention grabbing first line", "script": "Punchy 30 second narration script", "search_query": "Specific YouTube search to find demo of this tool", "images": [], "hashtags": ["#AI", "#Tech", "#AITools", "#Shorts"], "why_viral": "Why this will get views"}]}"""
 
     text = call_grok(prompt, api_key)
     logger.info(f'Grok AI news response: {text[:200] if text else "None"}')
+    # Store x_posts for image lookup
+    _x_posts_cache = x_posts
     
     if not text:
         return None
@@ -762,6 +1014,14 @@ Reply ONLY with this exact JSON, no other text:
             text = text[start:end]
         result = json.loads(text)
         if result.get('items'):
+            # Enrich items with X post images
+            for item in result['items']:
+                if not item.get('images') and x_posts:
+                    # Find matching X post images by category
+                    for xp in x_posts:
+                        if xp.get('category') == item.get('category') and xp.get('images'):
+                            item['images'] = xp['images']
+                            break
             return result
         logger.error(f'No items in Grok response: {result}')
         return None
@@ -822,53 +1082,15 @@ def process_ai_news_studio(job_id, params):
 
             clip_path = None
 
-            if use_aurora and grok_key:
-                # Generate AI visuals with Aurora
-                add_log(job_id, f'   🎥 Generating Aurora visuals...')
-                aurora_path = f'{work_dir}/aurora_{idx}.mp4'
-                video_prompt = item.get('video_prompt',
-                    f'Futuristic tech visualization, AI interface, {item["title"]}, '
-                    f'cinematic 9:16, dark theme, glowing elements, professional')
-                if grok_generate_video(video_prompt, aurora_path, grok_key, 10, '9:16'):
-                    # Generate 3 clips and concatenate for 30s
-                    clips = [aurora_path]
-                    for ci in range(2):
-                        cp = f'{work_dir}/aurora_{idx}_{ci}.mp4'
-                        prompt2 = f'Tech AI visualization continuation, {item["title"]}, cinematic vertical'
-                        if grok_generate_video(prompt2, cp, grok_key, 10, '9:16'):
-                            clips.append(cp)
-                    final_clip = f'{work_dir}/combined_{idx}.mp4'
-                    if concatenate_clips(clips, final_clip):
-                        clip_path = final_clip
-                        add_log(job_id, f'   ✅ Aurora video generated ({len(clips)*10}s)')
+            # Find best visuals — YouTube demo → X images → GitHub images
+            add_log(job_id, f'   🔍 Finding best visuals...')
+            clip_path, visual_source = fetch_best_visuals(item, work_dir, idx)
+            if clip_path:
+                source_labels = {'youtube': '📹 YouTube demo', 'x_images': '🖼️ X post images', 'github': '⚡ GitHub screenshots'}
+                add_log(job_id, f'   ✅ Visuals ready — {source_labels.get(visual_source, visual_source)}')
 
             if not clip_path:
-                # Generate multiple Aurora clips to make 30s video
-                add_log(job_id, f'   🎥 Generating Aurora visuals (3x10s)...')
-                clips_for_assembly = []
-                
-                visual_prompts = [
-                    f'Futuristic AI interface visualization: {item["title"]}. Dark theme, glowing elements, cinematic 9:16 vertical, professional tech aesthetic',
-                    f'Screen recording style demo of: {item.get("search_query", item["title"])}. Clean UI, smooth animations, vertical format, tech product showcase',
-                    f'Abstract data visualization representing: {item["title"]}. Neural networks, data flow, modern tech, cinematic vertical short'
-                ]
-                
-                for pi, vprompt in enumerate(visual_prompts):
-                    vpath = f'{work_dir}/aurora_{idx}_{pi}.mp4'
-                    if grok_generate_video(vprompt, vpath, grok_key, 10, '9:16'):
-                        clips_for_assembly.append(vpath)
-                        add_log(job_id, f'   ✅ Scene {pi+1}/3 generated')
-                    else:
-                        add_log(job_id, f'   ⚠️ Scene {pi+1} failed')
-                
-                if clips_for_assembly:
-                    combined = f'{work_dir}/combined_{idx}.mp4'
-                    if concatenate_clips(clips_for_assembly, combined):
-                        clip_path = combined
-                        add_log(job_id, f'   ✅ {len(clips_for_assembly)*10}s Aurora video ready')
-
-            if not clip_path:
-                add_log(job_id, f'   ❌ Could not generate visuals — skipping')
+                add_log(job_id, f'   ❌ No footage found — skipping')
                 continue
 
             # Add narration
@@ -879,6 +1101,20 @@ def process_ai_news_studio(job_id, params):
                 narr_out = f'{work_dir}/narrated_{idx}.mp4'
                 if overlay_narration(clip_path, tts_path, narr_out):
                     clip_path = narr_out
+
+            # Add text overlays
+            add_log(job_id, f'   📝 Adding text overlays...')
+            overlay_out = f'{work_dir}/overlay_{idx}.mp4'
+            key_points = [
+                item.get('hook', '')[:50],
+                f"Tool: {item['title'][:40]}",
+                item.get('why_viral', '')[:50]
+            ]
+            if add_text_overlays(clip_path, overlay_out, item['title'],
+                                item.get('hook', ''), key_points,
+                                'Follow for daily AI tools 🤖'):
+                clip_path = overlay_out
+                add_log(job_id, f'   ✅ Text overlays added')
 
             # Add music
             if music_enabled:

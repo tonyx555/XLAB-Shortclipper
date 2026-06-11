@@ -809,14 +809,39 @@ def download_via_rapidapi(video_url, output_dir, video_id):
         # Step 2: Download the video
         logger.info(f'RapidAPI: downloading {best_quality}p from {best_url[:60]}')
         output_path = os.path.join(output_dir, f'{video_id}.mp4')
+        temp_path = output_path + '.tmp'
+
         r2 = req.get(best_url, stream=True, timeout=300,
-                    headers={'User-Agent': 'Mozilla/5.0'})
-        with open(output_path, 'wb') as f:
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Referer': 'https://www.youtube.com/',
+                    })
+
+        with open(temp_path, 'wb') as f:
             for chunk in r2.iter_content(chunk_size=65536):
-                f.write(chunk)
+                if chunk:
+                    f.write(chunk)
+
+        if not os.path.exists(temp_path) or os.path.getsize(temp_path) < 100000:
+            return None
+
+        # Verify and remux to proper MP4 using ffmpeg
+        result = subprocess.run([
+            'ffmpeg', '-i', temp_path,
+            '-c', 'copy', '-y', output_path,
+            '-loglevel', 'quiet'
+        ], capture_output=True, timeout=120)
+
+        # Clean up temp
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
         if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
             return output_path
+
+        # If remux failed, try the temp file directly
+        if os.path.exists(temp_path.replace('.tmp', '')):
+            return temp_path.replace('.tmp', '')
 
     except Exception as e:
         logger.error(f'RapidAPI download error: {e}')

@@ -530,48 +530,79 @@ def grok_tts(text, output_path, api_key, voice='ara'):
 
 
 def grok_generate_video(prompt, output_path, api_key, duration=10, aspect_ratio='9:16'):
-    """Generate video using Grok Aurora. ~$0.15/clip, ~17-60s generation."""
+    """Generate video using Grok Aurora. ~$0.15/clip.
+    Correct endpoint: POST /v1/videos/generations, poll with request_id.
+    """
     import requests as req
+    api_key = api_key.strip()
     if not api_key:
         return False
     try:
-        r = req.post('https://api.x.ai/v1/video/generations',
+        # Submit generation
+        payload = {
+            'model': 'grok-imagine-video',
+            'prompt': prompt,
+            'duration': duration,
+            'aspect_ratio': aspect_ratio,
+        }
+        r = req.post(
+            'https://api.x.ai/v1/videos/generations',
             headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
-            json={'model': 'grok-imagine-video', 'prompt': prompt,
-                  'duration': duration, 'aspect_ratio': aspect_ratio,
-                  'resolution': '720p', 'with_audio': True},
-            timeout=30)
+            json=payload,
+            timeout=30
+        )
+        logger.info(f'Aurora submit: {r.status_code} {r.text[:200]}')
         if r.status_code not in (200, 201, 202):
-            logger.error(f'Grok video submit: {r.status_code} {r.text[:200]}')
+            logger.error(f'Aurora submit failed: {r.status_code} {r.text[:200]}')
             return False
         data = r.json()
-        generation_id = data.get('id') or data.get('generation_id')
-        if not generation_id:
+        # Get request_id for polling
+        request_id = data.get('request_id') or data.get('id') or data.get('generation_id')
+        if not request_id:
+            logger.error(f'No request_id in Aurora response: {data}')
             return False
-        # Poll until ready
-        for attempt in range(30):
-            time.sleep(10)
-            r2 = req.get(f'https://api.x.ai/v1/video/generations/{generation_id}',
-                headers={'Authorization': f'Bearer {api_key}'}, timeout=15)
+        logger.info(f'Aurora generation started: {request_id}')
+        # Poll until done — usually 17-60 seconds
+        for attempt in range(40):
+            time.sleep(8)
+            r2 = req.get(
+                f'https://api.x.ai/v1/videos/generations/{request_id}',
+                headers={'Authorization': f'Bearer {api_key}'},
+                timeout=15
+            )
             if r2.status_code != 200:
+                logger.warning(f'Aurora poll {attempt}: {r2.status_code}')
                 continue
             result = r2.json()
             status = result.get('status', '')
-            if status == 'succeeded':
+            logger.info(f'Aurora status {attempt}: {status}')
+            if status in ('done', 'succeeded', 'completed'):
                 video_url = (result.get('video') or {}).get('url') or result.get('url')
+                if not video_url:
+                    # Try other response fields
+                    for key in ['video_url', 'output', 'result']:
+                        if result.get(key):
+                            video_url = result[key] if isinstance(result[key], str) else result[key].get('url')
+                            break
                 if video_url:
-                    r3 = req.get(video_url, stream=True, timeout=120)
+                    logger.info(f'Aurora video ready: {video_url[:60]}')
+                    r3 = req.get(video_url, stream=True, timeout=120,
+                                headers={'Authorization': f'Bearer {api_key}'})
                     with open(output_path, 'wb') as f:
                         for chunk in r3.iter_content(chunk_size=65536):
                             if chunk: f.write(chunk)
-                    return os.path.exists(output_path) and os.path.getsize(output_path) > 10000
+                    size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+                    logger.info(f'Aurora downloaded: {size/1024:.0f}KB')
+                    return size > 10000
+                logger.error(f'Aurora done but no URL: {result}')
                 return False
-            elif status in ('failed', 'cancelled'):
-                logger.error(f'Grok video failed: {result}')
+            elif status in ('failed', 'cancelled', 'error'):
+                logger.error(f'Aurora generation failed: {result}')
                 return False
+        logger.error('Aurora timed out after 40 attempts')
         return False
     except Exception as e:
-        logger.error(f'Grok video error: {e}')
+        logger.error(f'Aurora error: {e}')
         return False
 
 

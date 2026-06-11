@@ -1010,7 +1010,7 @@ def process_job(job_id, params):
                 out_tmpl = f'{raw_dir}/{v["id"]}.%(ext)s'
                 cmd = [
                     'yt-dlp',
-                    '--format', 'best[ext=mp4]/best',
+                    # No --format flag = yt-dlp auto picks best available
                     '--merge-output-format', 'mp4',
                     '--output', out_tmpl,
                     '--no-playlist', '--no-warnings',

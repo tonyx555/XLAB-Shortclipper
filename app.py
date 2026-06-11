@@ -635,41 +635,32 @@ def process_ai_news_studio(job_id, params):
                         add_log(job_id, f'   ✅ Aurora video generated ({len(clips)*10}s)')
 
             if not clip_path:
-                # Fallback: search and download YouTube footage
-                add_log(job_id, f'   🔍 Finding footage for: {item.get("search_query",item["title"])}')
-                search_q = item.get('search_query', item['title'])
-                proxy = os.environ.get('PROXY_URL', '')
-                cmd = ['yt-dlp','--dump-json','--no-playlist','--no-warnings',
-                       '--flat-playlist','--extractor-args','youtube:player_client=web']
-                if proxy: cmd += ['--proxy', proxy]
-                cmd.append(f'ytsearch1:{search_q}')
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                vid_url = None
-                vid_id = None
-                for line in r.stdout.strip().split('\n'):
-                    if line.strip():
-                        try:
-                            info = json.loads(line)
-                            vid_id = info.get('id','')
-                            vid_url = info.get('webpage_url') or f'https://youtube.com/watch?v={vid_id}'
-                            break
-                        except: continue
-
-                if vid_url and vid_id:
-                    add_log(job_id, f'   ⬇️ Downloading footage...')
-                    dl_path = download_via_rapidapi(vid_url, work_dir, f'news_{idx}')
-                    if dl_path:
-                        # Cut a good clip from it
-                        cut_path = f'{work_dir}/cut_{idx}.mp4'
-                        try:
-                            dur = get_duration(dl_path)
-                            start = max(0, dur * 0.2)
-                            cut_vertical(dl_path, start, 30, cut_path, is_vertical(dl_path))
-                            clip_path = cut_path
-                        except: pass
+                # Generate multiple Aurora clips to make 30s video
+                add_log(job_id, f'   🎥 Generating Aurora visuals (3x10s)...')
+                clips_for_assembly = []
+                
+                visual_prompts = [
+                    f'Futuristic AI interface visualization: {item["title"]}. Dark theme, glowing elements, cinematic 9:16 vertical, professional tech aesthetic',
+                    f'Screen recording style demo of: {item.get("search_query", item["title"])}. Clean UI, smooth animations, vertical format, tech product showcase',
+                    f'Abstract data visualization representing: {item["title"]}. Neural networks, data flow, modern tech, cinematic vertical short'
+                ]
+                
+                for pi, vprompt in enumerate(visual_prompts):
+                    vpath = f'{work_dir}/aurora_{idx}_{pi}.mp4'
+                    if grok_generate_video(vprompt, vpath, grok_key, 10, '9:16'):
+                        clips_for_assembly.append(vpath)
+                        add_log(job_id, f'   ✅ Scene {pi+1}/3 generated')
+                    else:
+                        add_log(job_id, f'   ⚠️ Scene {pi+1} failed')
+                
+                if clips_for_assembly:
+                    combined = f'{work_dir}/combined_{idx}.mp4'
+                    if concatenate_clips(clips_for_assembly, combined):
+                        clip_path = combined
+                        add_log(job_id, f'   ✅ {len(clips_for_assembly)*10}s Aurora video ready')
 
             if not clip_path:
-                add_log(job_id, f'   ⚠️ No footage — skipping')
+                add_log(job_id, f'   ❌ Could not generate visuals — skipping')
                 continue
 
             # Add narration
@@ -1964,6 +1955,116 @@ def get_formats():
     except Exception as e:
         logger.error(f'Format fetch error: {e}')
         return jsonify({'formats': [{'id': 'auto', 'label': 'Best available (auto)', 'ext': 'mp4'}]})
+
+
+# ============================================================
+# MULTI-CHANNEL MANAGER
+# ============================================================
+
+CHANNELS = {}  # channel_id -> channel config
+
+@app.route('/api/channels', methods=['GET'])
+def get_channels():
+    return jsonify(list(CHANNELS.values()))
+
+@app.route('/api/channels', methods=['POST'])
+def create_channel():
+    data = request.json
+    cid = str(uuid.uuid4())[:8]
+    channel = {
+        'id': cid,
+        'name': data.get('name', 'My Channel'),
+        'niche': data.get('niche', 'ai tools'),
+        'categories': data.get('categories', ['ai_tools']),
+        'mode': data.get('mode', 'ai_news'),  # ai_news, clips, studio
+        'schedule_hour': int(data.get('schedule_hour', 9)),
+        'max_videos': int(data.get('max_videos', 3)),
+        'yt_token': data.get('yt_token', ''),
+        'music_style': data.get('music_style', 'dramatic'),
+        'voice': data.get('voice', 'ara'),
+        'active': True,
+        'last_run': '',
+        'total_posted': 0,
+        'created_at': datetime.now().isoformat()
+    }
+    CHANNELS[cid] = channel
+    # Start scheduler for this channel
+    start_channel_scheduler(cid)
+    return jsonify(channel)
+
+@app.route('/api/channels/<cid>', methods=['DELETE'])
+def delete_channel(cid):
+    if cid in CHANNELS:
+        CHANNELS[cid]['active'] = False
+        del CHANNELS[cid]
+    return jsonify({'success': True})
+
+@app.route('/api/channels/<cid>/toggle', methods=['POST'])
+def toggle_channel(cid):
+    if cid in CHANNELS:
+        CHANNELS[cid]['active'] = not CHANNELS[cid].get('active', True)
+        return jsonify(CHANNELS[cid])
+    return jsonify({'error': 'Not found'}), 404
+
+@app.route('/api/channels/<cid>/run', methods=['POST'])
+def run_channel_now(cid):
+    if cid not in CHANNELS:
+        return jsonify({'error': 'Not found'}), 404
+    channel = CHANNELS[cid]
+    job_id = trigger_channel_job(cid, channel)
+    return jsonify({'job_id': job_id})
+
+def trigger_channel_job(cid, channel):
+    job_id = str(uuid.uuid4())
+    JOBS[job_id] = {
+        'id': job_id, 'status': 'queued',
+        'created_at': datetime.now().isoformat(),
+        'progress': 0, 'logs': [],
+        'channel_id': cid,
+        'channel_name': channel.get('name', '')
+    }
+    params = {
+        'niche': channel.get('niche', ''),
+        'categories': channel.get('categories', []),
+        'max_videos': channel.get('max_videos', 3),
+        'use_aurora': 'Yes',
+        'music_enabled': 'Yes',
+        'music_style': channel.get('music_style', 'dramatic'),
+        'voice': channel.get('voice', 'ara'),
+        'auto_upload': 'Yes' if channel.get('yt_token') else 'No',
+        'yt_access_token': channel.get('yt_token', ''),
+    }
+    mode = channel.get('mode', 'ai_news')
+    if mode == 'ai_news':
+        t = threading.Thread(target=process_ai_news_studio, args=(job_id, params), daemon=True)
+    elif mode == 'studio':
+        params['topic'] = channel.get('niche', '')
+        t = threading.Thread(target=process_ai_content_job, args=(job_id, params), daemon=True)
+    else:
+        t = threading.Thread(target=process_job, args=(job_id, params), daemon=True)
+    t.start()
+    CHANNELS[cid]['last_run'] = datetime.now().strftime('%Y-%m-%d')
+    CHANNELS[cid]['total_posted'] = CHANNELS[cid].get('total_posted', 0) + params['max_videos']
+    return job_id
+
+def start_channel_scheduler(cid):
+    def run():
+        while CHANNELS.get(cid, {}).get('active'):
+            try:
+                channel = CHANNELS.get(cid)
+                if not channel:
+                    break
+                now = datetime.now()
+                if (now.hour == channel.get('schedule_hour', 9) and
+                    now.minute == 0 and
+                    channel.get('last_run','') != now.strftime('%Y-%m-%d')):
+                    logger.info(f'Running channel: {channel["name"]}')
+                    trigger_channel_job(cid, channel)
+            except Exception as e:
+                logger.error(f'Channel scheduler error: {e}')
+            time.sleep(60)
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
 
 
 @app.route('/api/ai-news', methods=['POST'])

@@ -543,6 +543,20 @@ select { cursor: pointer; }
 /* ============================================================
    AI CONTENT CHIPS
    ============================================================ */
+.lib-filter {
+  padding: 5px 12px; border-radius: 20px;
+  border: 1px solid rgba(255,255,255,0.07);
+  background: rgba(255,255,255,0.03);
+  color: var(--dim); font-size: 11px; font-weight: 600;
+  cursor: pointer; font-family: var(--font);
+  transition: all 0.15s;
+}
+.lib-filter.active {
+  background: rgba(230,51,41,0.1);
+  color: #ff6b5b;
+  border-color: rgba(230,51,41,0.3);
+}
+
 .topic-chip {
   padding: 6px 12px; border-radius: 20px;
   border: 1px solid rgba(255,255,255,0.08);
@@ -629,6 +643,9 @@ select { cursor: pointer; }
       <div style="height:1px;background:#1e1e1e;margin:6px 0"></div>
       <button onclick="showView('schedule');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#888;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
         <span style="font-size:16px">⏰</span> Schedules
+      </button>
+      <button onclick="showView('library');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#888;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
+        <span style="font-size:16px">📁</span> Video Library
       </button>
       <button onclick="showView('history');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#888;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
         <span style="font-size:16px">📋</span> History
@@ -1424,6 +1441,37 @@ select { cursor: pointer; }
     <button class="btn btn-red" onclick="generateGrokVideo()" id="grokBtn" style="background:linear-gradient(135deg,#7c3aed,#4f46e5)">
       Generate with Grok AI →
     </button>
+
+  </div>
+
+  <!-- ============================================================
+       VIEW: VIDEO LIBRARY
+       ============================================================ -->
+  <div class="view" id="view-library">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 16px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button onclick="showView('source')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:0">←</button>
+        <div>
+          <div style="font-size:16px;font-weight:800;color:var(--white)">Video Library</div>
+          <div style="font-size:11px;color:var(--muted)">All generated videos — download for any platform</div>
+        </div>
+      </div>
+      <button onclick="loadLibrary()" style="background:none;border:1px solid #222;color:#555;font-size:11px;padding:5px 10px;border-radius:6px;cursor:pointer;font-family:var(--font)">Refresh</button>
+    </div>
+
+    <!-- Platform filter -->
+    <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
+      <button onclick="filterLibrary('all')" class="lib-filter active" id="lf_all">All</button>
+      <button onclick="filterLibrary('ai_news')" class="lib-filter" id="lf_ai_news">📡 AI News</button>
+      <button onclick="filterLibrary('grok_original')" class="lib-filter" id="lf_grok_original">✨ Grok</button>
+      <button onclick="filterLibrary('studio')" class="lib-filter" id="lf_studio">🎬 Studio</button>
+      <button onclick="filterLibrary('clips')" class="lib-filter" id="lf_clips">✂️ Clips</button>
+    </div>
+
+    <div id="libraryList">
+      <p style="color:var(--muted);font-size:13px;padding:12px 0">No videos yet. Generate some content first.</p>
+    </div>
 
   </div>
 
@@ -2274,6 +2322,85 @@ async function generateAIContent() {
     btn.textContent = '🤖 Generate AI Video →';
   }
 }
+
+// ============================================================
+// Video Library
+// ============================================================
+let allLibraryVideos = [];
+let currentLibFilter = 'all';
+
+async function loadLibrary() {
+  try {
+    const r = await fetch('/api/library');
+    allLibraryVideos = await r.json();
+    renderLibrary(allLibraryVideos);
+  } catch(e) {}
+}
+
+function filterLibrary(category) {
+  currentLibFilter = category;
+  document.querySelectorAll('.lib-filter').forEach(b => b.classList.remove('active'));
+  document.getElementById('lf_' + category)?.classList.add('active');
+  const filtered = category === 'all' ? allLibraryVideos :
+    allLibraryVideos.filter(v => v.source === category);
+  renderLibrary(filtered);
+}
+
+function renderLibrary(videos) {
+  const list = document.getElementById('libraryList');
+  if (!list) return;
+  if (!videos.length) {
+    list.innerHTML = '<p style="color:var(--muted);font-size:13px;padding:12px 0">No videos in this category yet.</p>';
+    return;
+  }
+  const sourceLabels = { ai_news:'📡 AI News', grok_original:'✨ Grok', studio:'🎬 Studio', clips:'✂️ Clips' };
+  list.innerHTML = videos.map(v => {
+    const platforms = ['YouTube','TikTok','Instagram','X'];
+    const published = v.published || [];
+    return `
+    <div class="card" style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:700;color:#e8e8f0;margin-bottom:3px;line-height:1.3">${v.title}</div>
+          <div style="font-size:10px;color:#555;margin-bottom:6px">${v.created_at?.substring(0,16).replace('T',' ')} · ${v.size_mb}MB</div>
+          <span style="background:#111;border:1px solid #1e1e1e;color:#555;font-size:9px;padding:1px 6px;border-radius:3px">${sourceLabels[v.source]||v.source}</span>
+        </div>
+        <a href="/api/library/${v.id}/download" style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.25);color:#22c55e;font-size:10px;font-weight:700;padding:6px 10px;border-radius:8px;text-decoration:none;white-space:nowrap;flex-shrink:0">⬇ Download</a>
+      </div>
+      <!-- Platform publish tracking -->
+      <div style="display:flex;gap:5px;margin-top:8px;flex-wrap:wrap">
+        ${platforms.map(p => `
+          <button onclick="markPublished('${v.id}','${p}',this)"
+            style="background:${published.includes(p) ? 'rgba(34,197,94,0.1)' : '#0a0a0a'};
+                   border:1px solid ${published.includes(p) ? 'rgba(34,197,94,0.3)' : '#1e1e1e'};
+                   color:${published.includes(p) ? '#22c55e' : '#444'};
+                   font-size:9px;font-weight:700;padding:3px 8px;border-radius:5px;cursor:pointer;font-family:var(--font)">
+            ${published.includes(p) ? '✓' : '+'} ${p}
+          </button>`).join('')}
+        <button onclick="deleteLibraryVideo('${v.id}')" style="background:none;border:none;color:#2a2a2a;font-size:9px;cursor:pointer;font-family:var(--font);margin-left:auto">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function markPublished(vid, platform, btn) {
+  await fetch(`/api/library/${vid}/mark-published`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({platform})
+  });
+  loadLibrary();
+}
+
+async function deleteLibraryVideo(vid) {
+  if (!confirm('Delete this video?')) return;
+  await fetch(`/api/library/${vid}`, {method: 'DELETE'});
+  loadLibrary();
+}
+
+window.addEventListener('load', () => {
+  loadLibrary();
+});
 
 // Menu toggle
 function toggleMenu() {

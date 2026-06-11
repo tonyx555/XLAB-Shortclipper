@@ -566,7 +566,7 @@ def grok_generate_video(prompt, output_path, api_key, duration=10, aspect_ratio=
         for attempt in range(40):
             time.sleep(8)
             r2 = req.get(
-                f'https://api.x.ai/v1/videos/generations/{request_id}',
+                f'https://api.x.ai/v1/videos/{request_id}',
                 headers={'Authorization': f'Bearer {api_key}'},
                 timeout=15
             )
@@ -2509,6 +2509,24 @@ def stripe_webhook():
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/test-aurora', methods=['GET'])
+def test_aurora():
+    import requests as req
+    api_key = os.environ.get('GROK_API_KEY', '').strip()
+    if not api_key:
+        return jsonify({'error': 'No GROK_API_KEY'})
+    try:
+        r = req.post(
+            'https://api.x.ai/v1/videos/generations',
+            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            json={'model': 'grok-imagine-video', 'prompt': 'A glowing blue AI interface', 'duration': 6},
+            timeout=30
+        )
+        return jsonify({'status': r.status_code, 'response': r.json()})
+    except Exception as e:
+        return jsonify({'error': str(e)})
 
 
 @app.route('/api/test-grok', methods=['GET'])

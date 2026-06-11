@@ -1008,9 +1008,26 @@ def process_job(job_id, params):
             if not downloaded_path and proxy:
                 add_log(job_id, f'   🔄 Downloading via proxy...')
                 out_tmpl = f'{raw_dir}/{v["id"]}.%(ext)s'
+
+                # Use format selected by user, or auto-detect best
+                selected_fmt = v.get('selected_format', 'best')
+                if not selected_fmt or selected_fmt == 'best':
+                    # Auto detect — list formats and pick best mp4
+                    fmt_cmd = ['yt-dlp', '--list-formats', '--no-warnings',
+                               '--proxy', proxy,
+                               '--extractor-args', 'youtube:player_client=web',
+                               v['url']]
+                    fmt_result = subprocess.run(fmt_cmd, capture_output=True, text=True, timeout=30)
+                    fmt_output = fmt_result.stdout or ''
+                    if '1080' in fmt_output: selected_fmt = 'bestvideo[height<=1080]+bestaudio/best'
+                    elif '720' in fmt_output: selected_fmt = 'bestvideo[height<=720]+bestaudio/best'
+                    else: selected_fmt = 'best'
+
+                add_log(job_id, f'   📋 Format: {selected_fmt.split("/")[0][:40]}')
+
                 cmd = [
                     'yt-dlp',
-                    # No --format flag = yt-dlp auto picks best available
+                    '--format', selected_fmt,
                     '--merge-output-format', 'mp4',
                     '--output', out_tmpl,
                     '--no-playlist', '--no-warnings',
@@ -1321,6 +1338,52 @@ def search_via_invidious(query, max_results=5):
             logger.error(f'Invidious {instance} error: {e}')
             continue
     return []
+
+
+@app.route('/api/formats', methods=['POST'])
+def get_formats():
+    data = request.json
+    url = data.get('url', '')
+    proxy = os.environ.get('PROXY_URL', '')
+    try:
+        cmd = [
+            'yt-dlp', '--list-formats', '--no-warnings',
+            '--extractor-args', 'youtube:player_client=web',
+        ]
+        if proxy:
+            cmd += ['--proxy', proxy]
+        cmd.append(url)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        
+        # Parse formats into clean list
+        formats = []
+        for line in result.stdout.split('\n'):
+            # Look for lines with format info
+            if any(q in line for q in ['1080', '720', '480', '360', '240']) and ('mp4' in line or 'webm' in line):
+                parts = line.split()
+                if len(parts) >= 3:
+                    fmt_id = parts[0]
+                    ext = parts[1] if len(parts) > 1 else 'mp4'
+                    # Get resolution
+                    res = next((p for p in parts if 'x' in p or 'p' in p.lower()), '')
+                    label = f"{res} {ext}".strip()
+                    if fmt_id and label:
+                        formats.append({'id': fmt_id, 'label': label, 'ext': ext})
+        
+        # Remove duplicates, keep best per resolution
+        seen = set()
+        unique = []
+        for f in formats:
+            key = f['label']
+            if key not in seen:
+                seen.add(key)
+                unique.append(f)
+        
+        # Always add 'best' option
+        unique = [{'id': 'best', 'label': 'Best available (auto)', 'ext': 'mp4'}] + unique[:8]
+        return jsonify({'formats': unique})
+    except Exception as e:
+        return jsonify({'formats': [{'id': 'best', 'label': 'Best available (auto)', 'ext': 'mp4'}]})
 
 
 @app.route('/api/search', methods=['POST'])

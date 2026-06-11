@@ -683,6 +683,10 @@ def process_ai_news_studio(job_id, params):
             import shutil as _sh
             _sh.copy2(clip_path, final_path)
 
+            # Save to permanent library
+            save_to_library(final_path, item['title'],
+                          item.get('category','ai_news'), 'ai_news', job_id)
+
             # Upload to YouTube
             yt_id = ''
             if auto_upload and yt_token:
@@ -818,6 +822,10 @@ def process_grok_original_video(job_id, params):
                 add_log(job_id, f'   ✅ https://youtube.com/shorts/{yt_id}')
 
         size = os.path.getsize(final_path) / (1024*1024)
+
+        # Save to permanent library
+        save_to_library(final_path, script['title'], 'grok_original', 'grok_original', job_id)
+
         zip_name = f'{work_dir}/grok_video_{job_id[:8]}.zip'
         with zipfile.ZipFile(zip_name, 'w') as zf:
             zf.write(final_path, os.path.basename(final_path))
@@ -1962,6 +1970,73 @@ def get_formats():
 # ============================================================
 
 CHANNELS = {}  # channel_id -> channel config
+GENERATED_VIDEOS = {}  # video_id -> metadata + path
+
+VIDEOS_DIR = '/tmp/xlab_library'
+os.makedirs(VIDEOS_DIR, exist_ok=True)
+
+
+def save_to_library(video_path, title, category, source, job_id):
+    """Save generated video to permanent library for multi-platform publishing."""
+    vid_id = str(uuid.uuid4())[:8]
+    filename = f'{vid_id}_{title[:30].replace(" ","_").replace("/","")}.mp4'
+    lib_path = os.path.join(VIDEOS_DIR, filename)
+    try:
+        import shutil
+        shutil.copy2(video_path, lib_path)
+        GENERATED_VIDEOS[vid_id] = {
+            'id': vid_id,
+            'title': title,
+            'category': category,
+            'source': source,  # ai_news, grok_original, studio, clips
+            'path': lib_path,
+            'filename': filename,
+            'created_at': datetime.now().isoformat(),
+            'job_id': job_id,
+            'size_mb': round(os.path.getsize(lib_path)/(1024*1024), 1),
+            'published': []  # track which platforms published to
+        }
+        return vid_id
+    except Exception as e:
+        logger.error(f'Library save error: {e}')
+        return None
+
+
+@app.route('/api/library', methods=['GET'])
+def get_library():
+    videos = sorted(GENERATED_VIDEOS.values(),
+                   key=lambda x: x['created_at'], reverse=True)
+    return jsonify(videos)
+
+
+@app.route('/api/library/<vid_id>/download', methods=['GET'])
+def download_library_video(vid_id):
+    if vid_id not in GENERATED_VIDEOS:
+        return jsonify({'error': 'Not found'}), 404
+    v = GENERATED_VIDEOS[vid_id]
+    if not os.path.exists(v['path']):
+        return jsonify({'error': 'File not found'}), 404
+    return send_file(v['path'], as_attachment=True, download_name=v['filename'])
+
+
+@app.route('/api/library/<vid_id>/mark-published', methods=['POST'])
+def mark_published(vid_id):
+    data = request.json
+    if vid_id in GENERATED_VIDEOS:
+        platform = data.get('platform', 'unknown')
+        if platform not in GENERATED_VIDEOS[vid_id]['published']:
+            GENERATED_VIDEOS[vid_id]['published'].append(platform)
+    return jsonify({'success': True})
+
+
+@app.route('/api/library/<vid_id>', methods=['DELETE'])
+def delete_library_video(vid_id):
+    if vid_id in GENERATED_VIDEOS:
+        v = GENERATED_VIDEOS[vid_id]
+        if os.path.exists(v['path']):
+            os.remove(v['path'])
+        del GENERATED_VIDEOS[vid_id]
+    return jsonify({'success': True})
 
 @app.route('/api/channels', methods=['GET'])
 def get_channels():

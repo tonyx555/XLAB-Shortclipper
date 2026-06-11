@@ -4,7 +4,7 @@ Flask app with in-memory job tracking, background processing,
 direct ZIP download. No Firebase or GCS needed.
 """
 
-import os, json, shutil, glob, zipfile, subprocess, sys
+import os, json, shutil, glob, zipfile, subprocess, sys, time
 import threading, uuid, logging, warnings
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, send_file, render_template
@@ -1026,8 +1026,8 @@ def process_job(job_id, params):
                     '--proxy', proxy,
                     '--socket-timeout', '30',
                     '--retries', '3',
-                    '--extractor-args', 'youtube:player_client=web,web_safari',
-                    '--add-header', 'User-Agent:Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
+                    '--extractor-args', 'youtube:player_client=android,ios,web',
+                    '--add-header', 'User-Agent:com.google.ios.youtube/19.29.1 CFNetwork/1474 Darwin/23.0.0',
                 ]
                 if cookies_file:
                     cmd += ['--cookies', cookies_file]
@@ -1340,7 +1340,7 @@ def get_formats():
     try:
         cmd = [
             'yt-dlp', '--list-formats', '--no-warnings',
-            '--extractor-args', 'youtube:player_client=web',
+            '--extractor-args', 'youtube:player_client=android,ios,web',
         ]
         if proxy:
             cmd += ['--proxy', proxy]

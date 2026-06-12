@@ -880,13 +880,41 @@ def post_to_x(video_path, text, api_key, api_secret, access_token, access_token_
         return None
 
 
+def call_gemini_free(prompt, api_key=None):
+    """Call Gemini API — completely free tier available.
+    Get key at aistudio.google.com
+    """
+    import requests as req
+    key = (api_key or os.environ.get('GEMINI_API_KEY') or 
+           os.environ.get('CLAUDE_API_KEY', '')).strip()
+    if not key:
+        return None
+    try:
+        r = req.post(
+            f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}',
+            json={'contents': [{'parts': [{'text': prompt}]}],
+                  'generationConfig': {'maxOutputTokens': 2000, 'temperature': 0.7}},
+            timeout=30
+        )
+        data = r.json()
+        if 'candidates' in data:
+            return data['candidates'][0]['content']['parts'][0]['text']
+        logger.error(f'Gemini error: {str(data)[:100]}')
+        return None
+    except Exception as e:
+        logger.error(f'Gemini error: {e}')
+        return None
+
+
 def call_grok(prompt, api_key):
-    """Call Grok API for text generation."""
+    """Call Grok API with Gemini fallback when credits run out."""
     import requests as req
     if not api_key:
-        return None
+        return call_gemini_free(prompt)
     api_key = api_key.strip()
-    for model in ['grok-3', 'grok-2-1212', 'grok-beta']:
+    
+    # Try to get available models first
+    for model in ['grok-3', 'grok-4', 'grok-2-1212', 'grok-beta']:
         try:
             r = req.post(
                 'https://api.x.ai/v1/chat/completions',
@@ -896,19 +924,21 @@ def call_grok(prompt, api_key):
                 timeout=30
             )
             data = r.json()
-            logger.info(f'Grok model {model} response keys: {list(data.keys())}')
             if 'choices' in data:
                 return data['choices'][0]['message']['content']
-            elif 'error' in data:
-                logger.error(f'Grok {model} error: {data["error"]}')
-                continue
-            else:
-                logger.error(f'Grok {model} unexpected: {str(data)[:100]}')
-                continue
+            err = data.get('error', {})
+            err_code = err.get('code', '') if isinstance(err, dict) else ''
+            if err_code == 'permission-denied':
+                # Credits exhausted — fall back to Gemini
+                logger.warning('Grok credits exhausted — falling back to Gemini')
+                return call_gemini_free(prompt)
+            logger.error(f'Grok {model}: {str(data)[:100]}')
         except Exception as e:
-            logger.error(f'Grok {model} exception: {e}')
-            continue
-    return None
+            logger.error(f'Grok {model} error: {e}')
+    
+    # Final fallback to Gemini
+    logger.info('Falling back to Gemini for text generation')
+    return call_gemini_free(prompt)
 
 
 def grok_tts(text, output_path, api_key, voice='ara'):
@@ -1376,7 +1406,11 @@ Hook style: "{hooks_example}"
 Reply ONLY with valid JSON:
 {{"items": [{{"category": "{niche_key}", "title": "HOOK IN CAPS under 60 chars", "hook": "Opening line that grabs in 2 seconds", "script": "Punchy 30 second script, factual, exciting", "search_query": "Specific YouTube search for demo/footage", "images": [], "key_facts": ["fact1", "fact2", "fact3"], "hashtags": ["#{config['name'].replace(' ','')}","#Shorts","#viral"], "why_viral": "Why this will get views"}}]}}"""
 
+    # Try Grok first, then Gemini free fallback
     text = call_grok(prompt, api_key)
+    if not text:
+        logger.info('Grok failed — trying Gemini free')
+        text = call_gemini_free(prompt)
     logger.info(f'Content finder response: {text[:200] if text else "None"}')
     
     if not text:
@@ -1702,26 +1736,28 @@ def build_ai_news_short(job_id, item, work_dir, idx, grok_key, avatar_path=None)
     hook = item.get('hook', f'This AI just dropped and nobody is talking about it')
     script = item.get('script', '')
     
-    # ── Part 1: Avatar intro clip (0-8s) ──────────────────────
-    if avatar_path and grok_key and os.path.exists(avatar_path):
-        add_log(job_id, f'   🎭 Generating avatar intro...')
-        try:
-            intro_script = f"{hook}. {script[:100]}"
-            avatar_intro = f'{work_dir}/avatar_intro_{idx}.mp4'
-            if aurora_image_to_video(
-                avatar_path, None, avatar_intro, grok_key,
-                prompt=f'Person talking confidently to camera: {intro_script[:80]}'
-            ):
-                norm_intro = f'{work_dir}/norm_intro_{idx}.mp4'
-                if normalize_clip(avatar_intro, norm_intro):
-                    clips.append(norm_intro)
-                    add_log(job_id, f'   ✅ Avatar intro ready')
-                else:
-                    add_log(job_id, f'   ⚠️ Avatar intro normalize failed — skipping')
-            else:
-                add_log(job_id, f'   ⚠️ Aurora failed — continuing without avatar intro')
-        except Exception as e:
-            add_log(job_id, f'   ⚠️ Avatar error: {str(e)[:50]} — continuing')
+    # ── Part 1: Hook title card (free — no Aurora needed) ────
+    add_log(job_id, f'   🎬 Creating hook title card...')
+    try:
+        # Create a simple hook title card using ffmpeg
+        hook_card = f'{work_dir}/hook_{idx}.mp4'
+        safe_hook = hook[:60].replace("'","").replace('"','').replace(':','')
+        subprocess.run([
+            'ffmpeg', '-f', 'lavfi',
+            '-i', f'color=c=black:size=1080x1920:duration=4:rate=30',
+            '-vf', (f"drawtext=text='{safe_hook}':fontsize=52:fontcolor=white:"
+                   f"x=(w-text_w)/2:y=(h-text_h)/2:fontweight=bold:"
+                   f"box=1:boxcolor=black@0.5:boxborderw=20,"
+                   f"drawtext=text='XLAB':fontsize=24:fontcolor=red:alpha=0.8:"
+                   f"x=w-tw-20:y=20:fontweight=bold"),
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-pix_fmt', 'yuv420p', '-y', hook_card, '-loglevel', 'quiet'
+        ], capture_output=True, timeout=30)
+        if os.path.exists(hook_card) and os.path.getsize(hook_card) > 10000:
+            clips.append(hook_card)
+            add_log(job_id, f'   ✅ Hook card ready')
+    except Exception as e:
+        add_log(job_id, f'   ⚠️ Hook card error: {str(e)[:40]}')
     
     # ── Part 2: Demo footage middle (8-22s) ───────────────────
     add_log(job_id, f'   🎬 Finding best demo footage...')
@@ -1755,28 +1791,33 @@ def build_ai_news_short(job_id, item, work_dir, idx, grok_key, avatar_path=None)
             clips.append(demo_path)  # use raw clip even if processing fails
     
     # ── Part 3: Avatar CTA outro (22-30s) ─────────────────────
-    if avatar_path and grok_key and os.path.exists(avatar_path):
-        add_log(job_id, f'   🎭 Generating avatar CTA...')
-        try:
-            affiliate = get_affiliate_info(title)
-            cta_text = 'Follow for daily AI tools'
-            if affiliate and affiliate.get('commission') != 'N/A':
-                cta_text = f"Link in bio — {affiliate['commission']} commission"
-            avatar_cta = f'{work_dir}/avatar_cta_{idx}.mp4'
-            if aurora_image_to_video(avatar_path, None, avatar_cta, grok_key,
-                prompt='Person speaking enthusiastically: Follow for daily AI tools'):
-                norm_cta = f'{work_dir}/norm_cta_{idx}.mp4'
-                if normalize_clip(avatar_cta, norm_cta):
-                    cta_overlay = f'{work_dir}/cta_overlay_{idx}.mp4'
-                    if add_text_overlays(norm_cta, cta_overlay,
-                                        'FOLLOW FOR DAILY AI TOOLS 👀',
-                                        cta_text, [], 'NEW VIDEO EVERY DAY'):
-                        clips.append(cta_overlay)
-                    else:
-                        clips.append(norm_cta)
-                    add_log(job_id, f'   ✅ Avatar CTA ready')
-        except Exception as e:
-            add_log(job_id, f'   ⚠️ Avatar CTA error: {str(e)[:50]} — skipping')
+    # ── Part 3: Free CTA card ─────────────────────────────────
+    add_log(job_id, f'   🎬 Creating CTA card...')
+    try:
+        affiliate = get_affiliate_info(title)
+        cta_line = 'FOLLOW FOR DAILY AI TOOLS'
+        sub_line = 'New video every day 👀'
+        if affiliate and affiliate.get('commission') not in ('N/A', None):
+            sub_line = 'Link in bio — ' + affiliate['commission'] + ' commission'
+
+        cta_card = f'{work_dir}/cta_{idx}.mp4'
+        subprocess.run([
+            'ffmpeg', '-f', 'lavfi',
+            '-i', 'color=c=black:size=1080x1920:duration=3:rate=30',
+            '-vf', (f"drawtext=text='{cta_line}':fontsize=48:fontcolor=white:"
+                   f"x=(w-text_w)/2:y=h*0.42:fontweight=bold,"
+                   f"drawtext=text='{sub_line}':fontsize=32:fontcolor=#ff6b5b:"
+                   f"x=(w-text_w)/2:y=h*0.55,"
+                   f"drawtext=text='XLAB':fontsize=24:fontcolor=red:alpha=0.8:"
+                   f"x=w-tw-20:y=20:fontweight=bold"),
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-pix_fmt', 'yuv420p', '-y', cta_card, '-loglevel', 'quiet'
+        ], capture_output=True, timeout=30)
+        if os.path.exists(cta_card) and os.path.getsize(cta_card) > 10000:
+            clips.append(cta_card)
+            add_log(job_id, f'   ✅ CTA card ready')
+    except Exception as e:
+        add_log(job_id, f'   ⚠️ CTA card error: {str(e)[:40]}')
     
     # If avatar_only mode — generate longer avatar clip with full narration
     if source == 'avatar_only' and avatar_path and grok_key:

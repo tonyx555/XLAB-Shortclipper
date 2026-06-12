@@ -496,31 +496,49 @@ def fetch_best_visuals(item, work_dir, idx):
     """Get the best visuals for an AI news item — tries multiple sources."""
     import requests as req
 
-    # Source 1: YouTube demo
+    # Source 1: YouTube demo via RapidAPI search
     search_q = item.get('search_query', item['title']) + ' demo tutorial'
-    proxy = os.environ.get('PROXY_URL', '')
+    logger.info(f'Searching YouTube for: {search_q[:60]}')
+    rapidapi_key = os.environ.get('RAPIDAPI_KEY', '')
+    
     try:
-        cmd = ['yt-dlp', '--dump-json', '--no-playlist', '--no-warnings',
-               '--extractor-args', 'youtube:player_client=android,ios',
-               f'ytsearch3:{search_q}']
-        if proxy: cmd += ['--proxy', proxy]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        for line in r.stdout.strip().split('\n'):
-            if line.strip():
+        if rapidapi_key:
+            import requests as req2
+            # Use RapidAPI YouTube search directly
+            r = req2.get(
+                'https://youtube-media-downloader.p.rapidapi.com/v2/search/videos',
+                params={'query': search_q, 'hl': 'en', 'gl': 'US'},
+                headers={
+                    'x-rapidapi-key': rapidapi_key,
+                    'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com'
+                },
+                timeout=15
+            )
+            data = r.json()
+            logger.info(f'RapidAPI search response: {str(data)[:200]}')
+            items = data.get('items', [])
+            for it in items[:3]:
+                dur = it.get('duration', {}).get('secondsText', '0')
                 try:
-                    info = json.loads(line)
-                    dur = info.get('duration', 0)
-                    if 30 <= dur <= 600:
-                        vid_url = info.get('webpage_url') or f'https://youtube.com/watch?v={info.get("id","")}'
-                        dl_path = download_via_rapidapi(vid_url, work_dir, f'news_{idx}')
-                        if dl_path:
-                            cut_path = f'{work_dir}/cut_{idx}.mp4'
+                    dur_secs = int(dur)
+                except:
+                    dur_secs = 0
+                if dur_secs >= 30:
+                    vid_id = it.get('id', '')
+                    vid_url = f'https://youtube.com/watch?v={vid_id}'
+                    logger.info(f'Trying download: {it.get("title","")[:40]}')
+                    dl_path = download_via_rapidapi(vid_url, work_dir, f'news_{idx}')
+                    if dl_path:
+                        cut_path = f'{work_dir}/cut_{idx}.mp4'
+                        try:
                             video_dur = get_duration(dl_path)
                             start = max(0, video_dur * 0.2)
                             cut_vertical(dl_path, start, 30, cut_path, is_vertical(dl_path))
                             if os.path.exists(cut_path) and os.path.getsize(cut_path) > 100000:
+                                logger.info(f'YouTube demo ready')
                                 return cut_path, 'youtube'
-                except: continue
+                        except Exception as e:
+                            logger.error(f'Cut error: {e}')
     except Exception as e:
         logger.error(f'YouTube search error: {e}')
 
@@ -2782,6 +2800,21 @@ def stripe_webhook():
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/grok-models', methods=['GET'])
+def list_grok_models():
+    import requests as req
+    api_key = os.environ.get('GROK_API_KEY', '').strip()
+    try:
+        r = req.get(
+            'https://api.x.ai/v1/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=10
+        )
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({'error': str(e)})
 
 
 @app.route('/api/test-aurora', methods=['GET'])

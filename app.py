@@ -492,22 +492,85 @@ def fetch_github_images(repo_url):
         return []
 
 
-def fetch_best_visuals(item, work_dir, idx):
-    """Get the best visuals for an AI news item — tries multiple sources."""
+# Standard output specs for all XLAB videos
+XLAB_WIDTH = 1080
+XLAB_HEIGHT = 1920  # 9:16 vertical for Shorts
+XLAB_FPS = 30
+XLAB_CRF = 22
+
+
+def normalize_clip(input_path, output_path, color_grade=True):
+    """Normalize to XLAB standard specs with optional color grading.
+    720p for avatar clips (Aurora native), 1080p for demo footage.
+    """
+    try:
+        # Color grading filter for premium look
+        # Slight contrast boost, warm shadows, cool highlights
+        grade = (
+            "eq=contrast=1.08:brightness=0.02:saturation=1.1,"
+            "curves=r='0/0 0.5/0.52 1/1':g='0/0 0.5/0.5 1/1':b='0/0 0.5/0.48 1/0.97'"
+        ) if color_grade else ""
+
+        vf_parts = [
+            f"scale={XLAB_WIDTH}:{XLAB_HEIGHT}:force_original_aspect_ratio=increase",
+            f"crop={XLAB_WIDTH}:{XLAB_HEIGHT}",
+            f"fps={XLAB_FPS}",
+        ]
+        if grade:
+            vf_parts.append(grade)
+        
+        vf = ",".join(vf_parts)
+
+        result = subprocess.run([
+            'ffmpeg', '-i', input_path,
+            '-vf', vf,
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', str(XLAB_CRF),
+            '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2',
+            '-movflags', '+faststart',
+            '-pix_fmt', 'yuv420p',
+            '-y', output_path, '-loglevel', 'quiet'
+        ], capture_output=True, timeout=120)
+
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 50000:
+            return True
+        logger.error(f'Normalize failed: {result.stderr[:100]}')
+        return False
+    except Exception as e:
+        logger.error(f'Normalize error: {e}')
+        return False
+
+
+def compile_highlights_from_multiple(search_queries, work_dir, output_path, target_duration=30):
+    """Download multiple videos and compile the most engaging moments.
+    This is the Opus Clip approach — find viral moments from existing content."""
     import requests as req
 
-    # Source 1: YouTube demo via RapidAPI search
-    search_q = item.get('search_query', item['title']) + ' demo tutorial'
-    logger.info(f'Searching YouTube for: {search_q[:60]}')
     rapidapi_key = os.environ.get('RAPIDAPI_KEY', '')
-    
-    try:
-        if rapidapi_key:
-            import requests as req2
-            # Use RapidAPI YouTube search directly
-            r = req2.get(
+    if not rapidapi_key:
+        return False
+
+    all_clips = []
+    seconds_per_source = target_duration // len(search_queries)
+
+    # Rewrite queries to specifically find screen recordings
+    screen_queries = []
+    for q in search_queries[:3]:
+        # Strip generic words and add screen recording terms
+        base = q.replace(' tutorial', '').replace(' demo', '').replace(' review 2025', '').replace(' how to use', '').strip()
+        screen_queries += [
+            f'{base} screen recording walkthrough',
+            f'{base} how to use tutorial 2025',
+            f'{base} demo review',
+        ]
+    search_queries = screen_queries[:3]
+
+    for qi, query in enumerate(search_queries[:3]):
+        try:
+            logger.info(f'Searching: {query[:50]}')
+            # Search YouTube via RapidAPI
+            r = req.get(
                 'https://youtube-media-downloader.p.rapidapi.com/v2/search/videos',
-                params={'query': search_q, 'hl': 'en', 'gl': 'US'},
+                params={'query': query, 'hl': 'en', 'gl': 'US'},
                 headers={
                     'x-rapidapi-key': rapidapi_key,
                     'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com'
@@ -515,32 +578,93 @@ def fetch_best_visuals(item, work_dir, idx):
                 timeout=15
             )
             data = r.json()
-            logger.info(f'RapidAPI search response: {str(data)[:200]}')
             items = data.get('items', [])
-            for it in items[:3]:
-                dur = it.get('duration', {}).get('secondsText', '0')
+            logger.info(f'Search "{query[:30]}": {len(items)} results')
+
+            # Try top 3 results until one downloads
+            for item in items[:3]:
+                vid_id = item.get('id', '')
+                if not vid_id:
+                    continue
+
+                vid_url = f'https://youtube.com/watch?v={vid_id}'
+                dl_path = download_via_rapidapi(vid_url, work_dir, f'src_{qi}_{vid_id[:6]}')
+
+                if not dl_path:
+                    continue
+
+                # Find the most engaging moment using peak audio detection
+                dur = get_duration(dl_path)
+                if dur < 10:
+                    continue
+
                 try:
-                    dur_secs = int(dur)
-                except:
-                    dur_secs = 0
-                if dur_secs >= 30:
-                    vid_id = it.get('id', '')
-                    vid_url = f'https://youtube.com/watch?v={vid_id}'
-                    logger.info(f'Trying download: {it.get("title","")[:40]}')
-                    dl_path = download_via_rapidapi(vid_url, work_dir, f'news_{idx}')
-                    if dl_path:
-                        cut_path = f'{work_dir}/cut_{idx}.mp4'
-                        try:
-                            video_dur = get_duration(dl_path)
-                            start = max(0, video_dur * 0.2)
-                            cut_vertical(dl_path, start, 30, cut_path, is_vertical(dl_path))
-                            if os.path.exists(cut_path) and os.path.getsize(cut_path) > 100000:
-                                logger.info(f'YouTube demo ready')
-                                return cut_path, 'youtube'
-                        except Exception as e:
-                            logger.error(f'Cut error: {e}')
-    except Exception as e:
-        logger.error(f'YouTube search error: {e}')
+                    # Extract audio for peak detection
+                    audio_path = f'{work_dir}/audio_{qi}.wav'
+                    subprocess.run([
+                        'ffmpeg', '-i', dl_path, '-vn', '-ar', '16000', '-ac', '1',
+                        '-t', '300', '-y', audio_path, '-loglevel', 'quiet'
+                    ], capture_output=True, timeout=60)
+
+                    best_start = 0
+                    if os.path.exists(audio_path):
+                        peaks = detect_peaks(audio_path, sensitivity=0.7)
+                        if peaks:
+                            # Skip first 20% (intro) and last 10% (outro)
+                            min_start = dur * 0.20
+                            max_start = dur * 0.75
+                            good_peaks = [p for p in peaks 
+                                         if min_start < p < max_start]
+                            if good_peaks:
+                                # Pick peak with highest energy — most action
+                                best_start = good_peaks[0]
+                            elif peaks:
+                                best_start = max(peaks[0], min_start)
+                    
+                    # For screen recording tutorials, middle section has best demo
+                    if best_start == 0 and dur > 60:
+                        best_start = dur * 0.25  # start at 25%
+
+                    # Cut the highlight clip
+                    clip_path = f'{work_dir}/highlight_{qi}.mp4'
+                    cut_vertical(dl_path, best_start, seconds_per_source + 2, clip_path, is_vertical(dl_path))
+
+                    if os.path.exists(clip_path) and os.path.getsize(clip_path) > 100000:
+                        all_clips.append(clip_path)
+                        logger.info(f'✅ Highlight from "{item.get("title","")[:30]}" at {best_start:.0f}s')
+                        break  # Got a clip from this query, move to next
+
+                except Exception as e:
+                    logger.error(f'Highlight extraction error: {e}')
+                    continue
+
+        except Exception as e:
+            logger.error(f'Search error for "{query}": {e}')
+
+    if not all_clips:
+        return False
+
+    # Concatenate all highlights
+    logger.info(f'Combining {len(all_clips)} highlight clips')
+    return concatenate_clips(all_clips, output_path)
+
+
+def fetch_best_visuals(item, work_dir, idx):
+    """Get the best visuals for an AI news item — tries multiple sources."""
+    import requests as req
+
+    # Source 1: Compile highlights — search specifically for screen recordings
+    title = item.get('title', '')
+    base_query = item.get('search_query', title)
+    search_queries = [
+        base_query + ' screen recording walkthrough',
+        base_query + ' tutorial how to use 2025',
+        title + ' demo review screen',
+    ]
+    logger.info(f'Compiling highlights from multiple sources: {title[:40]}')
+    compiled_path = f'{work_dir}/compiled_{idx}.mp4'
+    if compile_highlights_from_multiple(search_queries, work_dir, compiled_path):
+        return compiled_path, 'youtube'
 
     # Source 2: X post images
     x_images = item.get('images', [])
@@ -808,6 +932,136 @@ def grok_tts(text, output_path, api_key, voice='ara'):
         return False
 
 
+def aurora_generate_image(prompt, api_key):
+    """Generate an avatar image using Grok Aurora image generation."""
+    import requests as req
+    api_key = api_key.strip()
+    try:
+        r = req.post(
+            'https://api.x.ai/v1/images/generations',
+            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            json={
+                'model': 'grok-2-image',
+                'prompt': prompt,
+                'n': 1,
+                'response_format': 'url'
+            },
+            timeout=30
+        )
+        data = r.json()
+        logger.info(f'Aurora image: {r.status_code} {str(data)[:100]}')
+        if 'data' in data and data['data']:
+            return data['data'][0].get('url')
+        return None
+    except Exception as e:
+        logger.error(f'Aurora image error: {e}')
+        return None
+
+
+def aurora_image_to_video(image_path_or_url, audio_path, output_path, api_key, prompt="Person talking to camera, natural lip sync"):
+    """Animate an avatar image with lip-synced speech using Grok Aurora image-to-video.
+    Uses grok-imagine-video with image input for consistent character.
+    Cost: ~$0.15 per 10s clip.
+    """
+    import requests as req
+    import base64
+    api_key = api_key.strip()
+    if not api_key:
+        return False
+    try:
+        # Read image as base64 if local file
+        if os.path.exists(str(image_path_or_url)):
+            with open(image_path_or_url, 'rb') as f:
+                img_b64 = base64.b64encode(f.read()).decode()
+            image_data = f'data:image/jpeg;base64,{img_b64}'
+        else:
+            image_data = image_path_or_url
+
+        # Submit image-to-video generation
+        r = req.post(
+            'https://api.x.ai/v1/videos/generations',
+            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            json={
+                'model': 'grok-imagine-video',
+                'prompt': prompt,
+                'image': image_data,
+                'duration': 10,
+                'aspect_ratio': '9:16',
+                'with_audio': True,
+            },
+            timeout=30
+        )
+        logger.info(f'Aurora i2v submit: {r.status_code} {r.text[:200]}')
+        if r.status_code not in (200, 201, 202):
+            return False
+
+        data = r.json()
+        request_id = data.get('request_id') or data.get('id')
+        if not request_id:
+            return False
+
+        # Poll until ready
+        for attempt in range(40):
+            time.sleep(8)
+            r2 = req.get(
+                f'https://api.x.ai/v1/videos/{request_id}',
+                headers={'Authorization': f'Bearer {api_key}'},
+                timeout=15
+            )
+            if r2.status_code != 200:
+                continue
+            result = r2.json()
+            status = result.get('status', '')
+            logger.info(f'Aurora i2v status {attempt}: {status}')
+            if status in ('done', 'succeeded', 'completed'):
+                video_url = (result.get('video') or {}).get('url') or result.get('url')
+                if video_url:
+                    r3 = req.get(video_url, stream=True, timeout=120)
+                    with open(output_path, 'wb') as f:
+                        for chunk in r3.iter_content(chunk_size=65536):
+                            if chunk: f.write(chunk)
+                    return os.path.exists(output_path) and os.path.getsize(output_path) > 10000
+                return False
+            elif status in ('failed', 'cancelled', 'error'):
+                logger.error(f'Aurora i2v failed: {result}')
+                return False
+        return False
+    except Exception as e:
+        logger.error(f'Aurora i2v error: {e}')
+        return False
+
+
+def create_split_screen(avatar_path, demo_path, output_path, ratio=0.35):
+    """Create split screen: avatar on left, demo on right.
+    ratio = fraction of width for avatar (0.35 = 35% avatar, 65% demo)
+    """
+    try:
+        avatar_w = int(1080 * ratio)
+        demo_w = 1080 - avatar_w
+
+        result = subprocess.run([
+            'ffmpeg',
+            '-i', avatar_path,
+            '-i', demo_path,
+            '-filter_complex',
+            f'[0:v]scale={avatar_w}:1920:force_original_aspect_ratio=increase,crop={avatar_w}:1920[av];'
+            f'[1:v]scale={demo_w}:1920:force_original_aspect_ratio=increase,crop={demo_w}:1920[dv];'
+            f'[av][dv]hstack=inputs=2[out]',
+            '-map', '[out]',
+            '-map', '0:a?',
+            '-map', '1:a?',
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-c:a', 'aac', '-b:a', '128k',
+            '-movflags', '+faststart',
+            '-y', output_path, '-loglevel', 'quiet'
+        ], capture_output=True, timeout=120)
+
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 50000
+    except Exception as e:
+        logger.error(f'Split screen error: {e}')
+        return False
+
+
 def grok_generate_video(prompt, output_path, api_key, duration=10, aspect_ratio='9:16'):
     """Generate video using Grok Aurora. ~$0.15/clip.
     Correct endpoint: POST /v1/videos/generations, poll with request_id.
@@ -987,6 +1241,701 @@ def search_x_for_ai_news(categories=None):
     return posts
 
 
+# ============================================================
+# UNIVERSAL CONTENT FINDER
+# ============================================================
+
+NICHE_CONFIGS = {
+    'ai_tools': {
+        'name': 'AI Tools',
+        'emoji': '🤖',
+        'hooks': ['This AI just dropped and nobody knows about it', 'Big tech doesnt want you using this', 'This free AI replaces a $500/month tool'],
+        'x_queries': ['new AI tool launched', 'AI just released', 'free AI tool'],
+        'youtube_queries': ['AI tool tutorial 2025', 'new AI software demo'],
+        'angle': 'productivity and money making'
+    },
+    'conspiracy': {
+        'name': 'Hidden History',
+        'emoji': '👀',
+        'hooks': ['Nobody wants to talk about this', 'They never taught you this in school', 'This was hidden for 50 years'],
+        'x_queries': ['declassified document history', 'hidden history fact'],
+        'youtube_queries': ['declassified secrets documentary', 'hidden history facts'],
+        'angle': 'shocking historical truths'
+    },
+    'finance': {
+        'name': 'Finance Secrets',
+        'emoji': '💰',
+        'hooks': ['The rich use this and never talk about it', 'This financial trick is completely legal', 'Banks dont want you to know this'],
+        'x_queries': ['financial hack money saving', 'investing strategy nobody talks about'],
+        'youtube_queries': ['financial secret explained', 'money hack tutorial'],
+        'angle': 'making and saving money'
+    },
+    'hustle': {
+        'name': 'AI Hustles',
+        'emoji': '🚀',
+        'hooks': ['I made $X using this in 24 hours', 'This side hustle prints money', 'Nobody is doing this yet'],
+        'x_queries': ['AI side hustle money', 'make money online AI 2025'],
+        'youtube_queries': ['AI money making tutorial', 'side hustle with AI'],
+        'angle': 'making money with AI tools'
+    },
+    'tech_news': {
+        'name': 'Tech News',
+        'emoji': '📡',
+        'hooks': ['This just happened and nobody noticed', 'Big tech just changed everything', 'This tech dropped yesterday'],
+        'x_queries': ['tech announcement just released', 'startup launched product'],
+        'youtube_queries': ['tech news today', 'new technology 2025'],
+        'angle': 'underreported tech stories'
+    },
+    'health': {
+        'name': 'Health Facts',
+        'emoji': '🧠',
+        'hooks': ['Scientists just discovered this', 'Your doctor wont tell you this', 'This changes everything we knew'],
+        'x_queries': ['health study results 2025', 'medical discovery'],
+        'youtube_queries': ['health fact explained', 'science discovery 2025'],
+        'angle': 'health and wellness facts'
+    },
+    'crypto': {
+        'name': 'Crypto Alpha',
+        'emoji': '₿',
+        'hooks': ['This crypto move nobody is making', 'The next 100x nobody sees coming', 'Insiders are quietly buying this'],
+        'x_queries': ['crypto alpha signal', 'DeFi opportunity 2025'],
+        'youtube_queries': ['crypto tutorial 2025', 'blockchain explained'],
+        'angle': 'crypto opportunities'
+    },
+    'gaming': {
+        'name': 'Gaming Secrets',
+        'emoji': '🎮',
+        'hooks': ['This game secret was hidden for years', 'Developers dont want you doing this', 'This trick breaks the game'],
+        'x_queries': ['game secret discovered', 'gaming hack trick'],
+        'youtube_queries': ['game secret explained', 'hidden gaming trick'],
+        'angle': 'gaming secrets and tricks'
+    }
+}
+
+
+def find_content_for_niche(niche_key, api_key, max_items=3):
+    """Find fresh viral content for any niche using Grok + X API."""
+    config = NICHE_CONFIGS.get(niche_key, NICHE_CONFIGS['ai_tools'])
+    
+    # Search X for real posts in this niche
+    x_posts = []
+    bearer = os.environ.get('X_BEARER_TOKEN', '').strip()
+    if bearer:
+        import requests as req
+        from datetime import datetime, timedelta, timezone
+        start_time = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        for query in config['x_queries'][:2]:
+            try:
+                r = req.get(
+                    'https://api.twitter.com/2/tweets/search/recent',
+                    headers={'Authorization': f'Bearer {bearer}'},
+                    params={
+                        'query': query + ' -is:retweet lang:en',
+                        'max_results': 10,
+                        'start_time': start_time,
+                        'tweet.fields': 'public_metrics,text,attachments',
+                        'expansions': 'attachments.media_keys',
+                        'media.fields': 'url,preview_image_url,type'
+                    },
+                    timeout=15
+                )
+                data = r.json()
+                if 'data' in data:
+                    media_lookup = {m['media_key']: m.get('url') or m.get('preview_image_url','')
+                                   for m in data.get('includes',{}).get('media',[])}
+                    for t in sorted(data['data'],
+                                   key=lambda x: x.get('public_metrics',{}).get('like_count',0),
+                                   reverse=True)[:2]:
+                        media_keys = t.get('attachments',{}).get('media_keys',[])
+                        images = [media_lookup[k] for k in media_keys if k in media_lookup]
+                        x_posts.append({
+                            'text': t.get('text',''),
+                            'images': images,
+                            'likes': t.get('public_metrics',{}).get('like_count',0)
+                        })
+            except Exception as e:
+                logger.error(f'X search error: {e}')
+
+    # Build context
+    x_context = ''
+    if x_posts:
+        x_context = '\nReal trending ' + config['name'] + ' posts from X (last 48hrs):\n'
+        for p in x_posts[:4]:
+            img_note = ' [has ' + str(len(p.get('images',[]))) + ' images]' if p.get('images') else ''
+            x_context += '- ' + p['text'][:150] + ' (likes:' + str(p['likes']) + ')' + img_note + '\n'
+
+    # Generate content with Grok
+    hooks_example = config['hooks'][0]
+    prompt = f"""You are a viral content creator for the "{config['name']}" niche.
+Find {max_items} pieces of content that would go viral on TikTok/YouTube Shorts.
+Focus on: {config['angle']}
+Hook style: "{hooks_example}"
+{x_context}
+
+Reply ONLY with valid JSON:
+{{"items": [{{"category": "{niche_key}", "title": "HOOK IN CAPS under 60 chars", "hook": "Opening line that grabs in 2 seconds", "script": "Punchy 30 second script, factual, exciting", "search_query": "Specific YouTube search for demo/footage", "images": [], "key_facts": ["fact1", "fact2", "fact3"], "hashtags": ["#{config['name'].replace(' ','')}","#Shorts","#viral"], "why_viral": "Why this will get views"}}]}}"""
+
+    text = call_grok(prompt, api_key)
+    logger.info(f'Content finder response: {text[:200] if text else "None"}')
+    
+    if not text:
+        return None
+    
+    try:
+        text = text.replace('```json','').replace('```','').strip()
+        start = text.find('{')
+        end = text.rfind('}') + 1
+        if start >= 0 and end > start:
+            text = text[start:end]
+        result = json.loads(text)
+        
+        # Enrich with X images
+        if result.get('items'):
+            for item in result['items']:
+                if not item.get('images') and x_posts:
+                    for xp in x_posts:
+                        if xp.get('images'):
+                            item['images'] = xp['images']
+                            break
+            return result
+    except Exception as e:
+        logger.error(f'Content parse error: {e}')
+    return None
+
+
+def process_universal_studio(job_id, params):
+    """Generate viral content for ANY niche — the universal content machine."""
+    work_dir = f'/tmp/universal_{job_id}'
+    os.makedirs(work_dir, exist_ok=True)
+
+    try:
+        update_job(job_id, {'status': 'processing', 'started_at': datetime.now().isoformat()})
+
+        grok_key = os.environ.get('GROK_API_KEY', '').strip()
+        niche = params.get('niche', 'ai_tools')
+        max_videos = int(params.get('max_videos', 3))
+        auto_upload = params.get('auto_upload') == 'Yes'
+        yt_token = params.get('yt_access_token', '')
+        config = NICHE_CONFIGS.get(niche, NICHE_CONFIGS['ai_tools'])
+
+        if not grok_key:
+            raise Exception('Grok API key required')
+
+        add_log(job_id, f'{config["emoji"]} Finding viral {config["name"]} content...')
+        update_job(job_id, {'progress': 5})
+
+        data = find_content_for_niche(niche, grok_key, max_videos)
+        if not data or not data.get('items'):
+            raise Exception(f'No content found for {config["name"]}')
+
+        items = data['items'][:max_videos]
+        add_log(job_id, f'✅ Found {len(items)} stories')
+        for item in items:
+            add_log(job_id, f'   • {item["title"][:55]}')
+
+        produced = []
+        avatar_path = '/tmp/xlab_avatar.jpg'
+        if not os.path.exists(avatar_path):
+            avatar_path = None
+
+        for idx, item in enumerate(items):
+            add_log(job_id, config['emoji'] + ' Story ' + str(idx+1) + ': ' + item['title'][:50])
+            update_job(job_id, {'progress': 10 + int((idx/len(items))*80)})
+
+            # Build complete Short
+            final_path = build_ai_news_short(job_id, item, work_dir, idx, grok_key, avatar_path)
+
+            if not final_path:
+                add_log(job_id, f'   ❌ Failed — skipping')
+                continue
+
+            # Save to library
+            save_to_library(final_path, item['title'], niche, 'universal', job_id)
+
+            # Upload to YouTube
+            yt_id = ''
+            if auto_upload and yt_token:
+                add_log(job_id, f'   📤 Uploading to YouTube...')
+                desc = item['hook'] + '\n\n' + ' '.join(item.get('hashtags', ['#Shorts']))
+                yt_id = upload_to_youtube(final_path, item['title'], desc,
+                                         item.get('hashtags', ['#Shorts']), yt_token)
+                if yt_id:
+                    add_log(job_id, f'   ✅ https://youtube.com/shorts/{yt_id}')
+
+            # Post to X
+            x_key = os.environ.get('X_API_KEY', '')
+            x_secret = os.environ.get('X_API_SECRET', '')
+            x_token = os.environ.get('X_ACCESS_TOKEN', '')
+            x_token_secret = os.environ.get('X_ACCESS_TOKEN_SECRET', '')
+            if all([x_key, x_secret, x_token, x_token_secret]):
+                x_text = item['title'] + '\n\n' + ' '.join(item.get('hashtags', [])[:4])
+                post_to_x(final_path, x_text, x_key, x_secret, x_token, x_token_secret)
+
+            produced.append({'path': final_path, 'title': item['title'], 'yt_id': yt_id})
+            add_log(job_id, f'   ✅ Done')
+
+        if not produced:
+            raise Exception('No videos produced')
+
+        # ZIP all
+        zip_name = f'{work_dir}/content_{job_id[:8]}.zip'
+        with zipfile.ZipFile(zip_name, 'w') as zf:
+            for v in produced:
+                if os.path.exists(v['path']):
+                    zf.write(v['path'], os.path.basename(v['path']))
+
+        zip_size = os.path.getsize(zip_name) / (1024*1024)
+        add_log(job_id, f'\n🎉 Done! {len(produced)} videos ready ({zip_size:.1f}MB)')
+        update_job(job_id, {
+            'status': 'done', 'progress': 100,
+            'completed_at': datetime.now().isoformat(),
+            'zip_path': zip_name, 'zip_size_mb': round(zip_size, 1),
+            'total_clips': len(produced)
+        })
+
+    except Exception as e:
+        add_log(job_id, f'❌ Fatal error: {e}')
+        update_job(job_id, {'status': 'error', 'error': str(e)})
+
+
+def analyze_viral_blueprint(channel_handle, api_key):
+    """Analyze what topics/hooks work best in a niche by studying top performing content."""
+    prompt = f"""Analyze the content style of TikTok conspiracy channels like @conspiracy_peterx.
+
+Their viral formula:
+- Hook: "NOBODY WANTS TO TALK ABOUT THIS" or "SINCE NOBODY IS SAYING IT I WILL"
+- Topics: Historical facts, hidden truths, things mainstream media ignores
+- Format: Short punchy sentences, bold text overlays, dramatic delivery
+- Length: 30-60 seconds
+- Tone: Confident, slightly outraged, educational
+
+Generate 5 original conspiracy/mystery topics that would go viral using this exact formula.
+Topics should be FACTUAL — real historical events, declassified documents, genuine mysteries.
+NOT fake news or harmful misinformation.
+
+Reply ONLY with valid JSON:
+{{"items": [
+  {{
+    "title": "HOOK TEXT IN CAPS — under 60 chars",
+    "topic": "The actual factual story",
+    "hook": "Opening line that grabs attention",
+    "script": "30 second punchy script — facts only, dramatic delivery",
+    "key_facts": ["Fact 1", "Fact 2", "Fact 3"],
+    "search_query": "YouTube search for B-roll footage",
+    "text_overlays": ["LINE 1 IN CAPS", "LINE 2", "LINE 3"],
+    "hashtags": ["#conspiracy", "#history", "#didyouknow", "#facts"]
+  }}
+]}}"""
+
+    text = call_grok(prompt, api_key)
+    if not text:
+        return None
+    try:
+        text = text.replace('```json','').replace('```','').strip()
+        start = text.find('{')
+        end = text.rfind('}') + 1
+        if start >= 0 and end > start:
+            text = text[start:end]
+        return json.loads(text)
+    except Exception as e:
+        logger.error(f'Blueprint parse error: {e}')
+        return None
+
+
+# ============================================================
+# AFFILIATE DATABASE
+# ============================================================
+AFFILIATE_DB = {
+    'midjourney': {'url': 'https://midjourney.com', 'commission': '20%', 'program': 'midjourney.com/account'},
+    'elevenlabs': {'url': 'https://elevenlabs.io', 'commission': '22%', 'program': 'elevenlabs.io/affiliate'},
+    'jasper': {'url': 'https://jasper.ai', 'commission': '30%', 'program': 'jasper.ai/affiliates'},
+    'copy.ai': {'url': 'https://copy.ai', 'commission': '45%', 'program': 'copy.ai/affiliates'},
+    'synthesia': {'url': 'https://synthesia.io', 'commission': '20%', 'program': 'synthesia.io/affiliates'},
+    'heygen': {'url': 'https://heygen.com', 'commission': '25%', 'program': 'heygen.com/affiliates'},
+    'runway': {'url': 'https://runwayml.com', 'commission': '20%', 'program': 'runwayml.com/affiliates'},
+    'notion': {'url': 'https://notion.so', 'commission': '$10/ref', 'program': 'notion.so/affiliates'},
+    'claude': {'url': 'https://anthropic.com', 'commission': 'N/A', 'program': ''},
+    'chatgpt': {'url': 'https://openai.com', 'commission': 'N/A', 'program': ''},
+    'perplexity': {'url': 'https://perplexity.ai', 'commission': '20%', 'program': 'perplexity.ai/pro'},
+    'leonardo': {'url': 'https://leonardo.ai', 'commission': '20%', 'program': 'leonardo.ai/affiliates'},
+}
+
+def get_affiliate_info(tool_name):
+    """Find affiliate info for a tool by name matching."""
+    tool_lower = tool_name.lower()
+    for key, info in AFFILIATE_DB.items():
+        if key in tool_lower or tool_lower in key:
+            return info
+    return None
+
+
+def add_crossfade_transition(clip1, clip2, output, duration=0.5):
+    """Add smooth crossfade between two clips."""
+    try:
+        result = subprocess.run([
+            'ffmpeg',
+            '-i', clip1, '-i', clip2,
+            '-filter_complex',
+            f'[0:v][1:v]xfade=transition=fade:duration={duration}:offset=0[v];'
+            f'[0:a][1:a]acrossfade=d={duration}[a]',
+            '-map', '[v]', '-map', '[a]',
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-c:a', 'aac', '-b:a', '128k',
+            '-movflags', '+faststart',
+            '-y', output, '-loglevel', 'quiet'
+        ], capture_output=True, timeout=60)
+        return os.path.exists(output) and os.path.getsize(output) > 50000
+    except Exception as e:
+        logger.error(f'Crossfade error: {e}')
+        return False
+
+
+def fetch_tool_screenshots(tool_name, work_dir, idx):
+    """Fetch tool screenshots from Google Images as last resort."""
+    import requests as req
+    try:
+        # Use DuckDuckGo image search (no API key needed)
+        search = f'{tool_name} AI tool interface screenshot'
+        r = req.get(
+            'https://duckduckgo.com/',
+            params={'q': search, 'iax': 'images', 'ia': 'images'},
+            headers={'User-Agent': 'Mozilla/5.0'},
+            timeout=10
+        )
+        import re
+        # Extract image URLs from response
+        urls = re.findall(r'"thumbnail":"(https?://[^"]+)"', r.text)
+        valid_urls = [u for u in urls if any(ext in u.lower() 
+                     for ext in ['.jpg', '.jpeg', '.png', '.webp'])][:4]
+        
+        if valid_urls:
+            vid_path = f'{work_dir}/google_imgs_{idx}.mp4'
+            if create_video_from_images(valid_urls, vid_path, duration_each=6):
+                return vid_path, 'google_images'
+    except Exception as e:
+        logger.error(f'Google images error: {e}')
+    return None, None
+
+
+def fetch_website_screenshot(url, work_dir, idx):
+    """Take screenshot of tool website using a screenshot API."""
+    import requests as req
+    try:
+        # Use free screenshot API
+        shot_url = f'https://image.thum.io/get/width/1080/crop/1920/{url}'
+        r = req.get(shot_url, timeout=15)
+        if r.status_code == 200 and len(r.content) > 10000:
+            img_path = f'{work_dir}/website_{idx}.jpg'
+            with open(img_path, 'wb') as f:
+                f.write(r.content)
+            # Animate it
+            vid_path = f'{work_dir}/website_vid_{idx}.mp4'
+            if create_video_from_images([img_path], vid_path, duration_each=10):
+                return vid_path, 'website'
+    except Exception as e:
+        logger.error(f'Website screenshot error: {e}')
+    return None, None
+
+
+def smart_fetch_visuals(item, work_dir, idx):
+    """Smart visual fetching with 6 fallbacks — always finds something."""
+    title = item.get('title', '')
+    
+    # 1. YouTube demo
+    add_log_safe(f'   🔍 Searching YouTube demo...')
+    result, source = fetch_best_visuals(item, work_dir, idx)
+    if result:
+        return result, source
+    
+    # 2. X post images
+    x_images = item.get('images', [])
+    if x_images:
+        add_log_safe(f'   🖼️ Using X post images...')
+        img_vid = f'{work_dir}/ximg_{idx}.mp4'
+        if create_video_from_images(x_images, img_vid):
+            return img_vid, 'x_images'
+    
+    # 3. GitHub screenshots
+    text = item.get('script', '') + item.get('x_source', '')
+    import re
+    gh_match = re.search(r'github\.com/[^\s\)"]+', text)
+    if gh_match:
+        gh_url = 'https://' + gh_match.group(0)
+        gh_images = fetch_github_images(gh_url)
+        if gh_images:
+            gh_vid = f'{work_dir}/ghimg_{idx}.mp4'
+            if create_video_from_images(gh_images, gh_vid):
+                return gh_vid, 'github'
+    
+    # 4. Google image search
+    add_log_safe(f'   🔍 Searching Google images...')
+    result, source = fetch_tool_screenshots(title, work_dir, idx)
+    if result:
+        return result, source
+    
+    # 5. Website screenshot
+    # Try to find tool URL from script
+    url_match = re.search(r'https?://[^\s\)"]+\.[a-z]{2,}', text)
+    if url_match:
+        result, source = fetch_website_screenshot(url_match.group(0), work_dir, idx)
+        if result:
+            return result, source
+    
+    # 6. Pure avatar — no demo needed, avatar talks entire video
+    return None, 'avatar_only'
+
+
+def add_log_safe(msg):
+    """Log without job_id — used in utility functions."""
+    logger.info(msg)
+
+
+def build_ai_news_short(job_id, item, work_dir, idx, grok_key, avatar_path=None):
+    """Build a complete AI news Short with avatar intro + demo + avatar outro.
+    Format: avatar hook → demo footage → avatar CTA
+    Duration: ~30 seconds total
+    """
+    clips = []
+    
+    title = item.get('title', '')
+    hook = item.get('hook', f'This AI just dropped and nobody is talking about it')
+    script = item.get('script', '')
+    
+    # ── Part 1: Avatar intro clip (0-8s) ──────────────────────
+    if avatar_path and grok_key and os.path.exists(avatar_path):
+        add_log(job_id, f'   🎭 Generating avatar intro...')
+        try:
+            intro_script = f"{hook}. {script[:100]}"
+            avatar_intro = f'{work_dir}/avatar_intro_{idx}.mp4'
+            if aurora_image_to_video(
+                avatar_path, None, avatar_intro, grok_key,
+                prompt=f'Person talking confidently to camera: {intro_script[:80]}'
+            ):
+                norm_intro = f'{work_dir}/norm_intro_{idx}.mp4'
+                if normalize_clip(avatar_intro, norm_intro):
+                    clips.append(norm_intro)
+                    add_log(job_id, f'   ✅ Avatar intro ready')
+                else:
+                    add_log(job_id, f'   ⚠️ Avatar intro normalize failed — skipping')
+            else:
+                add_log(job_id, f'   ⚠️ Aurora failed — continuing without avatar intro')
+        except Exception as e:
+            add_log(job_id, f'   ⚠️ Avatar error: {str(e)[:50]} — continuing')
+    
+    # ── Part 2: Demo footage middle (8-22s) ───────────────────
+    add_log(job_id, f'   🎬 Finding best demo footage...')
+    demo_path, source = smart_fetch_visuals(item, work_dir, idx)
+    
+    if demo_path:
+        try:
+            # Add Grok narration over demo
+            narr_path = f'{work_dir}/narr_{idx}.mp3'
+            demo_narrated = f'{work_dir}/demo_narrated_{idx}.mp4'
+            if text_to_speech(script, narr_path):
+                if overlay_narration(demo_path, narr_path, demo_narrated):
+                    if os.path.exists(demo_narrated):
+                        demo_path = demo_narrated
+
+            # Add text overlays
+            overlay_out = f'{work_dir}/demo_overlay_{idx}.mp4'
+            key_points = item.get('key_facts', [
+                (item.get('hook') or '')[:45],
+                f'Tool: {title[:35]}',
+                'Free to try'
+            ])[:3]
+            if add_text_overlays(demo_path, overlay_out, title, hook, key_points, ''):
+                if os.path.exists(overlay_out):
+                    demo_path = overlay_out
+
+            clips.append(demo_path)
+            add_log(job_id, f'   ✅ Demo ready — {source}')
+        except Exception as e:
+            add_log(job_id, f'   ⚠️ Demo processing error: {str(e)[:50]}')
+            clips.append(demo_path)  # use raw clip even if processing fails
+    
+    # ── Part 3: Avatar CTA outro (22-30s) ─────────────────────
+    if avatar_path and grok_key and os.path.exists(avatar_path):
+        add_log(job_id, f'   🎭 Generating avatar CTA...')
+        try:
+            affiliate = get_affiliate_info(title)
+            cta_text = 'Follow for daily AI tools'
+            if affiliate and affiliate.get('commission') != 'N/A':
+                cta_text = f"Link in bio — {affiliate['commission']} commission"
+            avatar_cta = f'{work_dir}/avatar_cta_{idx}.mp4'
+            if aurora_image_to_video(avatar_path, None, avatar_cta, grok_key,
+                prompt='Person speaking enthusiastically: Follow for daily AI tools'):
+                norm_cta = f'{work_dir}/norm_cta_{idx}.mp4'
+                if normalize_clip(avatar_cta, norm_cta):
+                    cta_overlay = f'{work_dir}/cta_overlay_{idx}.mp4'
+                    if add_text_overlays(norm_cta, cta_overlay,
+                                        'FOLLOW FOR DAILY AI TOOLS 👀',
+                                        cta_text, [], 'NEW VIDEO EVERY DAY'):
+                        clips.append(cta_overlay)
+                    else:
+                        clips.append(norm_cta)
+                    add_log(job_id, f'   ✅ Avatar CTA ready')
+        except Exception as e:
+            add_log(job_id, f'   ⚠️ Avatar CTA error: {str(e)[:50]} — skipping')
+    
+    # If avatar_only mode — generate longer avatar clip with full narration
+    if source == 'avatar_only' and avatar_path and grok_key:
+        add_log(job_id, f'   🎭 No demo found — avatar talks full video...')
+        full_avatar = f'{work_dir}/full_avatar_{idx}.mp4'
+        if aurora_image_to_video(
+            avatar_path, None, full_avatar, grok_key,
+            prompt=f'Person talking enthusiastically about AI tools: {script[:100]}'
+        ):
+            norm_full = f'{work_dir}/norm_full_{idx}.mp4'
+            if normalize_clip(full_avatar, norm_full):
+                clips.append(norm_full)
+
+    if not clips:
+        return None
+    
+    # ── Assemble with crossfades ──────────────────────────────
+    add_log(job_id, f'   🎬 Assembling {len(clips)} parts with transitions...')
+    
+    if len(clips) == 1:
+        final_path = f'{work_dir}/final_{idx}.mp4'
+        import shutil
+        shutil.copy2(clips[0], final_path)
+    else:
+        # Add crossfades between each clip
+        current = clips[0]
+        for ci, next_clip in enumerate(clips[1:]):
+            faded = f'{work_dir}/faded_{idx}_{ci}.mp4'
+            if add_crossfade_transition(current, next_clip, faded, duration=0.4):
+                current = faded
+            else:
+                # Fallback to hard cut
+                merged = f'{work_dir}/merged_{idx}_{ci}.mp4'
+                concatenate_clips([current, next_clip], merged)
+                current = merged
+        final_path = current
+
+    if os.path.exists(final_path):
+        # Add background music
+        music_out = f'{work_dir}/music_{idx}.mp4'
+        if add_trending_music(final_path, music_out, 'dramatic', 0.12):
+            final_path = music_out
+        
+        size = os.path.getsize(final_path) / (1024*1024)
+        add_log(job_id, f'   ✅ Complete Short ready ({size:.1f}MB)')
+        return final_path
+    
+    return None
+
+
+def process_conspiracy_studio(job_id, params):
+    """Generate viral conspiracy/mystery Shorts using the proven blueprint."""
+    work_dir = f'/tmp/conspiracy_{job_id}'
+    os.makedirs(work_dir, exist_ok=True)
+
+    try:
+        update_job(job_id, {'status': 'processing', 'started_at': datetime.now().isoformat()})
+        grok_key = os.environ.get('GROK_API_KEY', '').strip() or params.get('grok_key', '')
+        max_videos = int(params.get('max_videos', 3))
+        auto_upload = params.get('auto_upload') == 'Yes'
+        yt_token = params.get('yt_access_token', '')
+
+        if not grok_key:
+            raise Exception('Grok API key required')
+
+        add_log(job_id, '🔍 Analyzing viral blueprint...')
+        update_job(job_id, {'progress': 5})
+
+        data = analyze_viral_blueprint('@conspiracy_peterx', grok_key)
+        if not data or not data.get('items'):
+            raise Exception('Could not generate topics')
+
+        items = data['items'][:max_videos]
+        add_log(job_id, f'✅ Generated {len(items)} topics')
+        for item in items:
+            add_log(job_id, f'   • {item["title"][:50]}')
+
+        produced = []
+
+        for idx, item in enumerate(items):
+            add_log(job_id, f'\n📱 Story {idx+1}: {item["title"][:50]}')
+            update_job(job_id, {'progress': 10 + int((idx/len(items))*75)})
+
+            # Find B-roll footage
+            add_log(job_id, f'   🎬 Finding footage...')
+            clip_path, source = fetch_best_visuals(item, work_dir, idx)
+
+            if not clip_path:
+                add_log(job_id, f'   ⚠️ No footage — skipping')
+                continue
+
+            # Add Grok narration
+            add_log(job_id, f'   🎙️ Adding narration...')
+            tts_path = f'{work_dir}/narr_{idx}.mp3'
+            if text_to_speech(item.get('script', item['hook']), tts_path):
+                narr_out = f'{work_dir}/narrated_{idx}.mp4'
+                if overlay_narration(clip_path, tts_path, narr_out):
+                    clip_path = narr_out
+
+            # Add viral text overlays
+            add_log(job_id, f'   📝 Adding bold text overlays...')
+            overlay_out = f'{work_dir}/overlay_{idx}.mp4'
+            key_facts = item.get('key_facts', [])[:3]
+            if add_text_overlays(clip_path, overlay_out,
+                                item['title'], item['hook'],
+                                key_facts, 'FOLLOW FOR MORE 👀'):
+                clip_path = overlay_out
+
+            # Save final
+            final_path = f'{work_dir}/conspiracy_{idx}_{job_id[:6]}.mp4'
+            import shutil as _sh
+            _sh.copy2(clip_path, final_path)
+            save_to_library(final_path, item['title'], 'conspiracy', 'conspiracy', job_id)
+
+            # Upload
+            yt_id = ''
+            if auto_upload and yt_token:
+                add_log(job_id, f'   📤 Uploading...')
+                desc = item['hook'] + '\n\n' + ' '.join(item.get('hashtags', ['#Shorts']))
+                yt_id = upload_to_youtube(final_path, item['title'], desc,
+                                         item.get('hashtags', ['#Shorts']), yt_token)
+                if yt_id:
+                    add_log(job_id, f'   ✅ https://youtube.com/shorts/{yt_id}')
+
+            # Post to X
+            x_key = os.environ.get('X_API_KEY', '')
+            x_secret = os.environ.get('X_API_SECRET', '')
+            x_token = os.environ.get('X_ACCESS_TOKEN', '')
+            x_token_secret = os.environ.get('X_ACCESS_TOKEN_SECRET', '')
+            if x_key and x_secret and x_token and x_token_secret:
+                x_text = item['title'] + '\n\n' + ' '.join(item.get('hashtags', [])[:4])
+                post_to_x(final_path, x_text, x_key, x_secret, x_token, x_token_secret)
+
+            produced.append({'path': final_path, 'title': item['title'], 'yt_id': yt_id})
+            add_log(job_id, f'   ✅ Done')
+
+        if not produced:
+            raise Exception('No videos produced')
+
+        zip_name = f'{work_dir}/conspiracy_{job_id[:8]}.zip'
+        with zipfile.ZipFile(zip_name, 'w') as zf:
+            for v in produced:
+                if os.path.exists(v['path']):
+                    zf.write(v['path'], os.path.basename(v['path']))
+
+        zip_size = os.path.getsize(zip_name) / (1024*1024)
+        add_log(job_id, f'\n🎉 Done! {len(produced)} videos ready')
+        update_job(job_id, {
+            'status': 'done', 'progress': 100,
+            'completed_at': datetime.now().isoformat(),
+            'zip_path': zip_name, 'zip_size_mb': round(zip_size, 1),
+            'total_clips': len(produced)
+        })
+
+    except Exception as e:
+        add_log(job_id, f'❌ Fatal error: {e}')
+        update_job(job_id, {'status': 'error', 'error': str(e)})
+
+
 def grok_find_ai_news(api_key, categories=None):
     """Use Grok to find latest AI news, hacks, tools from X that aren't viral yet."""
     if not categories:
@@ -1100,12 +2049,15 @@ def process_ai_news_studio(job_id, params):
 
             clip_path = None
 
-            # Find best visuals — YouTube demo → X images → GitHub images
-            add_log(job_id, f'   🔍 Finding best visuals...')
-            clip_path, visual_source = fetch_best_visuals(item, work_dir, idx)
-            if clip_path:
-                source_labels = {'youtube': '📹 YouTube demo', 'x_images': '🖼️ X post images', 'github': '⚡ GitHub screenshots'}
-                add_log(job_id, f'   ✅ Visuals ready — {source_labels.get(visual_source, visual_source)}')
+            # Build complete Short: avatar intro + demo + avatar CTA
+            add_log(job_id, f'   🎬 Building complete Short...')
+            avatar_path = '/tmp/xlab_avatar.jpg'
+            if not os.path.exists(avatar_path):
+                avatar_path = None
+            
+            clip_path = build_ai_news_short(
+                job_id, item, work_dir, idx, grok_key, avatar_path
+            )
 
             if not clip_path:
                 add_log(job_id, f'   ❌ No footage found — skipping')
@@ -1368,19 +2320,34 @@ def add_text_overlay(video_path, text, output_path, position='top'):
 
 
 def concatenate_clips(clip_paths, output_path):
-    """Concatenate multiple clips into one video."""
+    """Concatenate multiple clips — normalizes all to same format first."""
     try:
-        if len(clip_paths) == 1:
+        if not clip_paths:
+            return False
+
+        work_dir = os.path.dirname(output_path)
+
+        # Normalize all clips to same specs for consistent quality
+        norm_paths = []
+        for i, cp in enumerate(clip_paths):
+            norm_path = os.path.join(work_dir, f'norm_{i}.mp4')
+            if normalize_clip(cp, norm_path):
+                norm_paths.append(norm_path)
+            else:
+                norm_paths.append(cp)
+
+        if len(norm_paths) == 1:
             import shutil
-            shutil.copy2(clip_paths[0], output_path)
+            shutil.copy2(norm_paths[0], output_path)
             return True
 
         # Create concat file
         concat_file = output_path.replace('.mp4', '_concat.txt')
         with open(concat_file, 'w') as f:
-            for cp in clip_paths:
+            for cp in norm_paths:
                 f.write(f"file '{cp}'\n")
 
+        # Use copy since all clips are now same format
         cmd = [
             'ffmpeg', '-f', 'concat', '-safe', '0',
             '-i', concat_file,
@@ -1389,7 +2356,7 @@ def concatenate_clips(clip_paths, output_path):
         subprocess.run(cmd, check=True, timeout=300)
         if os.path.exists(concat_file):
             os.remove(concat_file)
-        return os.path.exists(output_path)
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 50000
     except Exception as e:
         logger.error(f'Concat error: {e}')
         return False
@@ -1678,12 +2645,14 @@ def download_via_rapidapi(video_url, output_dir, video_id):
             return None
 
         data = r.json()
+        logger.info(f'RapidAPI response keys: {list(data.keys())} errorId: {data.get("errorId")}')
         if data.get('errorId') != 'Success':
-            logger.error(f'RapidAPI error: {data.get("errorId")}')
+            logger.error(f'RapidAPI error: {data.get("errorId")} — {str(data)[:200]}')
             return None
 
         # Get best video stream
         videos = data.get('videos', {}).get('items', [])
+        logger.info(f'RapidAPI videos found: {len(videos)}')
         if not videos:
             # Try alternative response structure
             videos = data.get('streamingData', {}).get('formats', [])
@@ -2630,6 +3599,49 @@ def start_channel_scheduler(cid):
     t.start()
 
 
+@app.route('/api/universal', methods=['POST'])
+def create_universal():
+    params = request.json
+    job_id = str(uuid.uuid4())
+    niche = params.get('niche', 'ai_tools')
+    config = NICHE_CONFIGS.get(niche, NICHE_CONFIGS['ai_tools'])
+    update_job(job_id, {
+        'id': job_id, 'status': 'queued',
+        'created_at': datetime.now().isoformat(),
+        'progress': 0, 'logs': [],
+        'type': 'universal',
+        'topic': config['name']
+    })
+    thread = threading.Thread(target=process_universal_studio, args=(job_id, params), daemon=True)
+    thread.start()
+    return jsonify({'job_id': job_id})
+
+
+@app.route('/api/niche-configs', methods=['GET'])
+def get_niche_configs():
+    return jsonify([{
+        'key': k,
+        'name': v['name'],
+        'emoji': v['emoji'],
+    } for k, v in NICHE_CONFIGS.items()])
+
+
+@app.route('/api/conspiracy', methods=['POST'])
+def create_conspiracy():
+    params = request.json
+    job_id = str(uuid.uuid4())
+    update_job(job_id, {
+        'id': job_id, 'status': 'queued',
+        'created_at': datetime.now().isoformat(),
+        'progress': 0, 'logs': [],
+        'type': 'conspiracy',
+        'topic': 'Conspiracy Studio'
+    })
+    thread = threading.Thread(target=process_conspiracy_studio, args=(job_id, params), daemon=True)
+    thread.start()
+    return jsonify({'job_id': job_id})
+
+
 @app.route('/api/ai-news', methods=['POST'])
 def create_ai_news():
     params = request.json
@@ -2802,6 +3814,43 @@ def stripe_webhook():
         return jsonify({'error': str(e)}), 400
 
 
+@app.route('/api/test-download', methods=['GET'])
+def test_download():
+    """Test RapidAPI download with a known working video."""
+    import requests as req
+    api_key = os.environ.get('RAPIDAPI_KEY', '')
+    if not api_key:
+        return jsonify({'error': 'No RAPIDAPI_KEY'})
+    
+    # Test with a simple short video
+    vid_id = 'dQw4w9WgXcQ'  # Rick Astley - always works
+    
+    try:
+        r = req.get(
+            'https://youtube-media-downloader.p.rapidapi.com/v2/video/details',
+            params={'videoId': vid_id},
+            headers={
+                'x-rapidapi-key': api_key,
+                'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com'
+            },
+            timeout=15
+        )
+        data = r.json()
+        
+        # Extract video URLs
+        videos = data.get('videos', {}).get('items', [])
+        result = {
+            'status': r.status_code,
+            'errorId': data.get('errorId'),
+            'video_count': len(videos),
+            'first_video': videos[0] if videos else None,
+            'keys': list(data.keys())
+        }
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
+
 @app.route('/api/grok-models', methods=['GET'])
 def list_grok_models():
     import requests as req
@@ -2815,6 +3864,30 @@ def list_grok_models():
         return jsonify(r.json())
     except Exception as e:
         return jsonify({'error': str(e)})
+
+
+@app.route('/api/generate-avatar', methods=['POST'])
+def generate_avatar():
+    """Generate a channel avatar image using Grok Aurora."""
+    import requests as req
+    data = request.json or {}
+    prompt = data.get('prompt', 
+        'Professional AI news anchor, realistic, dark background, '
+        'futuristic aesthetic, looking directly at camera, high quality portrait')
+    api_key = os.environ.get('GROK_API_KEY', '').strip()
+    if not api_key:
+        return jsonify({'error': 'No GROK_API_KEY'})
+    url = aurora_generate_image(prompt, api_key)
+    if url:
+        # Save locally
+        avatar_path = '/tmp/xlab_avatar.jpg'
+        try:
+            r = req.get(url, timeout=15)
+            with open(avatar_path, 'wb') as f:
+                f.write(r.content)
+        except: pass
+        return jsonify({'url': url, 'saved': os.path.exists(avatar_path)})
+    return jsonify({'error': 'Generation failed'})
 
 
 @app.route('/api/test-aurora', methods=['GET'])

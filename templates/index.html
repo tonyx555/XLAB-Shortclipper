@@ -637,10 +637,19 @@ select { cursor: pointer; }
       <button onclick="showView('ainews');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#e8e8f0;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
         <span style="color:#6ee7b7;font-size:16px">📡</span> AI News Studio
       </button>
+      <button onclick="showView('universal');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#e8e8f0;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
+        <span style="font-size:16px">🌍</span> Universal Studio
+      </button>
+      <button onclick="showView('conspiracy');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#e8e8f0;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
+        <span style="font-size:16px">👀</span> Conspiracy Studio
+      </button>
       <button onclick="showView('grok');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#e8e8f0;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
         <span style="color:#a78bfa;font-size:16px">✨</span> Grok Originals
       </button>
       <div style="height:1px;background:#1e1e1e;margin:6px 0"></div>
+      <button onclick="showView('avatar');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#e8e8f0;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
+        <span style="font-size:16px">🎭</span> My Avatar
+      </button>
       <button onclick="showView('schedule');toggleMenu()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;color:#888;font-size:13px;font-weight:600;padding:10px 12px;border-radius:8px;cursor:pointer;font-family:var(--font);text-align:left">
         <span style="font-size:16px">⏰</span> Schedules
       </button>
@@ -1265,6 +1274,92 @@ select { cursor: pointer; }
   </div>
 
   <!-- ============================================================
+       VIEW: CONSPIRACY STUDIO
+       ============================================================ -->
+  <div class="view" id="view-conspiracy">
+
+    <div style="display:flex;align-items:center;gap:12px;margin:20px 0 16px">
+      <button onclick="showView('source')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:0">←</button>
+      <div>
+        <div style="font-size:16px;font-weight:800;color:var(--white)">👀 Conspiracy Studio</div>
+        <div style="font-size:11px;color:var(--muted)">Viral mystery & history Shorts — facts only</div>
+      </div>
+    </div>
+
+    <div style="background:rgba(255,200,0,0.06);border:1px solid rgba(255,200,0,0.15);border-radius:14px;padding:14px;margin-bottom:16px">
+      <div style="font-size:11px;color:#fbbf24;font-weight:700;margin-bottom:4px">Blueprint: @conspiracy_peterx format</div>
+      <div style="font-size:11px;color:#555;line-height:1.7">Bold hooks · Historical facts · "Nobody talks about this" angle · Dramatic voiceover · Viral text overlays</div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Videos per run</div>
+      <select id="conspMaxVideos">
+        <option value="1">1 video</option>
+        <option value="3" selected>3 videos</option>
+        <option value="5">5 videos</option>
+      </select>
+    </div>
+
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Auto-post</div>
+      <div class="pill-group">
+        <button class="pill" id="conspUpYes" onclick="setConspToggle('up','Yes')">Post to YouTube</button>
+        <button class="pill active" id="conspUpNo" onclick="setConspToggle('up','No')">Download only</button>
+      </div>
+    </div>
+
+    <button class="btn btn-red" onclick="runConspiracy()" id="conspBtn" style="background:linear-gradient(135deg,#78350f,#92400e)">
+      👀 Generate Conspiracy Shorts →
+    </button>
+
+  </div>
+
+  <!-- ============================================================
+       VIEW: UNIVERSAL STUDIO
+       ============================================================ -->
+  <div class="view" id="view-universal">
+
+    <div style="display:flex;align-items:center;gap:12px;margin:20px 0 16px">
+      <button onclick="showView('source')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:0">←</button>
+      <div>
+        <div style="font-size:16px;font-weight:800;color:var(--white)">🌍 Universal Studio</div>
+        <div style="font-size:11px;color:var(--muted)">Viral content for any niche — avatar + demo + auto-post</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Pick your niche</div>
+      <div id="nicheGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+        <!-- Loaded dynamically -->
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Settings</div>
+      <div class="field">
+        <label class="field-label">Videos per run</label>
+        <select id="univMaxVideos">
+          <option value="1">1 video</option>
+          <option value="3" selected>3 videos</option>
+          <option value="5">5 videos</option>
+        </select>
+      </div>
+      <div class="field" style="margin-top:10px">
+        <label class="field-label">Auto-post</label>
+        <div class="pill-group">
+          <button class="pill" id="univUpYes" onclick="setUnivToggle('up','Yes')">Post to YouTube</button>
+          <button class="pill active" id="univUpNo" onclick="setUnivToggle('up','No')">Download only</button>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn btn-red" onclick="runUniversal()" id="univBtn">
+      🌍 Generate Content →
+    </button>
+
+  </div>
+
+  <!-- ============================================================
        VIEW: AI NEWS STUDIO
        ============================================================ -->
   <div class="view" id="view-ainews">
@@ -1280,7 +1375,7 @@ select { cursor: pointer; }
     <div style="background:linear-gradient(135deg,rgba(34,197,94,0.08),rgba(16,185,129,0.05));border:1px solid rgba(34,197,94,0.15);border-radius:14px;padding:14px;margin-bottom:16px">
       <div style="font-size:11px;color:#6ee7b7;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">How it works</div>
       <div style="font-size:11px;color:#555;line-height:1.8">
-        Grok scans X for AI news not yet on YouTube → Aurora generates original visuals → Grok narrates → posts automatically. <span style="color:#6ee7b7">100% original content. Always first.</span>
+        Grok scans X for AI news → finds real YouTube demo footage → Grok narrates over it → posts automatically. <span style="color:#6ee7b7">Real demos. Always first.</span>
       </div>
     </div>
 
@@ -1321,9 +1416,9 @@ select { cursor: pointer; }
             <option value="5">5 videos</option>
           </select>
         </div>
-        <div style="background:rgba(124,58,237,0.08);border:1px solid rgba(124,58,237,0.2);border-radius:8px;padding:8px 12px;margin-top:8px">
-          <div style="font-size:11px;color:#a78bfa;font-weight:700">✨ Always Aurora AI generated</div>
-          <div style="font-size:10px;color:#555;margin-top:2px">100% original content — no YouTube needed</div>
+        <div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:8px;padding:8px 12px;margin-top:8px">
+          <div style="font-size:11px;color:#22c55e;font-weight:700">📹 Real YouTube demo footage</div>
+          <div style="font-size:10px;color:#555;margin-top:2px">Finds actual tool demos — much more convincing than AI visuals</div>
         </div>
       <div class="field" style="margin-top:10px">
         <label class="field-label">Music</label>
@@ -1497,6 +1592,49 @@ select { cursor: pointer; }
 
     <div id="historyList">
       <p style="color:var(--muted);font-size:13px;padding:12px 0">No downloads yet.</p>
+    </div>
+
+  </div>
+
+  <!-- ============================================================
+       VIEW: AVATAR
+       ============================================================ -->
+  <div class="view" id="view-avatar">
+
+    <div style="display:flex;align-items:center;gap:12px;margin:20px 0 16px">
+      <button onclick="showView('source')" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:0">←</button>
+      <div>
+        <div style="font-size:16px;font-weight:800;color:var(--white)">🎭 My Avatar</div>
+        <div style="font-size:11px;color:var(--muted)">Your AI channel presenter</div>
+      </div>
+    </div>
+
+    <!-- Current avatar -->
+    <div class="card" style="margin-bottom:12px;text-align:center">
+      <img id="avatarPreview" src="" style="display:none;width:160px;height:160px;border-radius:80px;object-fit:cover;margin:0 auto 12px;border:3px solid rgba(230,51,41,0.3)">
+      <div id="avatarPlaceholder" style="width:160px;height:160px;border-radius:80px;background:#111;border:2px dashed #222;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:40px">🤖</div>
+      <div style="font-size:12px;color:#555">Used in all AI News and long form videos</div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">Generate Avatar with Grok</div>
+      <label class="field-label">Style</label>
+      <select id="avatarStyle" style="margin-bottom:10px">
+        <option value="Professional AI news anchor, realistic, dark background, futuristic, looking at camera">Professional Anchor</option>
+        <option value="Young tech entrepreneur, casual, confident smile, studio lighting, looking at camera">Tech Entrepreneur</option>
+        <option value="Mysterious AI entity, hooded figure, glowing eyes, dark cinematic, facing camera">Mysterious AI</option>
+        <option value="Friendly AI assistant, warm smile, modern office background, professional">Friendly Assistant</option>
+      </select>
+      <label class="field-label">Custom prompt (optional)</label>
+      <input type="text" id="avatarPrompt" placeholder="Describe your avatar...">
+      <button onclick="generateAvatar()" id="avatarBtn" class="btn btn-red" style="margin-top:12px">
+        ✨ Generate Avatar
+      </button>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">Or upload your own</div>
+      <input type="file" id="avatarUpload" accept="image/*" onchange="uploadAvatar(this)" style="font-size:12px;color:#666">
     </div>
 
   </div>
@@ -2568,6 +2706,179 @@ async function deleteChannel(id) {
 
 
 // ============================================================
+// Avatar
+// ============================================================
+let currentAvatarUrl = localStorage.getItem('xlab_avatar_url') || '';
+
+function loadAvatarUI() {
+  if (currentAvatarUrl) {
+    document.getElementById('avatarPreview').src = currentAvatarUrl;
+    document.getElementById('avatarPreview').style.display = 'block';
+    document.getElementById('avatarPlaceholder').style.display = 'none';
+  }
+}
+
+async function generateAvatar() {
+  const btn = document.getElementById('avatarBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Generating...';
+  const style = document.getElementById('avatarStyle').value;
+  const custom = document.getElementById('avatarPrompt').value;
+  const prompt = custom || style;
+  try {
+    const r = await fetch('/api/generate-avatar', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({prompt})
+    });
+    const data = await r.json();
+    if (data.url) {
+      currentAvatarUrl = data.url;
+      localStorage.setItem('xlab_avatar_url', data.url);
+      document.getElementById('avatarPreview').src = data.url;
+      document.getElementById('avatarPreview').style.display = 'block';
+      document.getElementById('avatarPlaceholder').style.display = 'none';
+      alert('✅ Avatar generated! Used in all future videos.');
+    } else {
+      alert('Failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✨ Generate Avatar';
+  }
+}
+
+function uploadAvatar(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    currentAvatarUrl = e.target.result;
+    localStorage.setItem('xlab_avatar_url', e.target.result);
+    document.getElementById('avatarPreview').src = e.target.result;
+    document.getElementById('avatarPreview').style.display = 'block';
+    document.getElementById('avatarPlaceholder').style.display = 'none';
+  };
+  reader.readAsDataURL(file);
+}
+
+// ============================================================
+// Universal Studio
+// ============================================================
+let selectedNiche = 'ai_tools';
+const univToggles = { up: 'No' };
+
+function setUnivToggle(key, val) {
+  univToggles[key] = val;
+  document.getElementById('univUpYes').classList.toggle('active', val==='Yes');
+  document.getElementById('univUpNo').classList.toggle('active', val==='No');
+}
+
+async function loadNiches() {
+  try {
+    const r = await fetch('/api/niche-configs');
+    const niches = await r.json();
+    const grid = document.getElementById('nicheGrid');
+    if (!grid) return;
+    grid.innerHTML = niches.map(n => `
+      <button onclick="selectNiche('${n.key}',this)"
+        id="niche_${n.key}"
+        style="background:${n.key===selectedNiche?'rgba(230,51,41,0.1)':'#0a0a0a'};
+               border:1px solid ${n.key===selectedNiche?'rgba(230,51,41,0.4)':'#1e1e1e'};
+               color:${n.key===selectedNiche?'#ff6b5b':'#666'};
+               padding:10px 8px;border-radius:10px;cursor:pointer;
+               font-family:var(--font);font-size:12px;font-weight:600;text-align:center">
+        <div style="font-size:20px;margin-bottom:4px">${n.emoji}</div>
+        ${n.name}
+      </button>
+    `).join('');
+  } catch(e) {}
+}
+
+function selectNiche(key, btn) {
+  selectedNiche = key;
+  document.querySelectorAll('[id^="niche_"]').forEach(b => {
+    const isSelected = b.id === 'niche_' + key;
+    b.style.background = isSelected ? 'rgba(230,51,41,0.1)' : '#0a0a0a';
+    b.style.borderColor = isSelected ? 'rgba(230,51,41,0.4)' : '#1e1e1e';
+    b.style.color = isSelected ? '#ff6b5b' : '#666';
+  });
+}
+
+async function runUniversal() {
+  const btn = document.getElementById('univBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Generating...';
+  try {
+    const r = await fetch('/api/universal', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        niche: selectedNiche,
+        max_videos: parseInt(document.getElementById('univMaxVideos').value),
+        auto_upload: univToggles.up,
+        yt_access_token: getActiveToken() || '',
+      })
+    });
+    const data = await r.json();
+    currentJobId = data.job_id;
+    showView('job');
+    document.getElementById('jobTitle').textContent = '🌍 Universal Studio';
+    document.getElementById('doneBlock').style.display = 'none';
+    document.getElementById('logBox').textContent = '🌍 Finding viral content...';
+    startPolling();
+  } catch(e) {
+    alert('Failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🌍 Generate Content →';
+  }
+}
+
+// ============================================================
+// Conspiracy Studio
+// ============================================================
+const conspToggles = { up: 'No' };
+function setConspToggle(key, val) {
+  conspToggles[key] = val;
+  const map = { up: ['conspUpYes','conspUpNo'] };
+  const [y, n] = map[key];
+  document.getElementById(y).classList.toggle('active', val==='Yes');
+  document.getElementById(n).classList.toggle('active', val==='No');
+}
+
+async function runConspiracy() {
+  const btn = document.getElementById('conspBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Generating...';
+  try {
+    const r = await fetch('/api/conspiracy', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        max_videos: parseInt(document.getElementById('conspMaxVideos').value),
+        auto_upload: conspToggles.up,
+        yt_access_token: getActiveToken() || '',
+      })
+    });
+    const data = await r.json();
+    currentJobId = data.job_id;
+    showView('job');
+    document.getElementById('jobTitle').textContent = '👀 Conspiracy Studio';
+    document.getElementById('doneBlock').style.display = 'none';
+    document.getElementById('logBox').textContent = '👀 Generating viral conspiracy content...';
+    startPolling();
+  } catch(e) {
+    alert('Failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '👀 Generate Conspiracy Shorts →';
+  }
+}
+
+// ============================================================
 // AI News Studio
 // ============================================================
 const newsToggles = { music: 'Yes', up: 'No' };
@@ -2899,7 +3210,7 @@ async function loadKeyStatuses() {
 }
 
 window.addEventListener('load', () => {
-  const inits = [initAuth, initYouTubeUI, loadSchedules, renderHistory, loadLibrary, loadChannels, loadKeyStatuses];
+  const inits = [initAuth, initYouTubeUI, loadSchedules, renderHistory, loadLibrary, loadChannels, loadKeyStatuses, loadAvatarUI, loadNiches];
   inits.forEach(fn => { try { fn(); } catch(e) { console.warn('Init error:', fn.name, e); } });
   // Load saved Grok key
   try {

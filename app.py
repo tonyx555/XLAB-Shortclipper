@@ -447,6 +447,137 @@ Respond ONLY with valid JSON, no markdown:
         }
 
 
+def fetch_pexels_footage(query, work_dir, idx, api_key=None):
+    """Fetch free HD video footage from Pexels.
+    API key free at pexels.com/api — 200 requests/hour free.
+    """
+    import requests as req
+    key = api_key or os.environ.get('PEXELS_API_KEY', '')
+    if not key:
+        return None, None
+    try:
+        r = req.get(
+            'https://api.pexels.com/videos/search',
+            headers={'Authorization': key},
+            params={'query': query, 'per_page': 5, 'orientation': 'portrait'},
+            timeout=10
+        )
+        data = r.json()
+        videos = data.get('videos', [])
+        if not videos:
+            # Try landscape and crop to portrait
+            r2 = req.get(
+                'https://api.pexels.com/videos/search',
+                headers={'Authorization': key},
+                params={'query': query, 'per_page': 5},
+                timeout=10
+            )
+            videos = r2.json().get('videos', [])
+
+        for video in videos:
+            # Get best quality file
+            files = sorted(video.get('video_files', []),
+                          key=lambda x: x.get('height', 0), reverse=True)
+            for f in files:
+                if f.get('height', 0) >= 720:
+                    vid_url = f.get('link', '')
+                    if vid_url:
+                        # Download
+                        dl_path = os.path.join(work_dir, f'pexels_{idx}.mp4')
+                        r3 = req.get(vid_url, stream=True, timeout=60)
+                        with open(dl_path, 'wb') as fp:
+                            for chunk in r3.iter_content(chunk_size=65536):
+                                if chunk: fp.write(chunk)
+                        if os.path.exists(dl_path) and os.path.getsize(dl_path) > 100000:
+                            logger.info(f'Pexels footage: {dl_path}')
+                            return dl_path, 'pexels'
+        return None, None
+    except Exception as e:
+        logger.error(f'Pexels error: {e}')
+        return None, None
+
+
+def fetch_internet_archive_footage(query, work_dir, idx):
+    """Fetch free public domain footage from Internet Archive.
+    Perfect for historical conspiracy content.
+    No API key needed.
+    """
+    import requests as req
+    try:
+        # Search Internet Archive
+        r = req.get(
+            'https://archive.org/advancedsearch.php',
+            params={
+                'q': f'{query} mediatype:movies',
+                'fl': 'identifier,title',
+                'rows': 5,
+                'output': 'json'
+            },
+            timeout=10
+        )
+        docs = r.json().get('response', {}).get('docs', [])
+        
+        for doc in docs:
+            identifier = doc.get('identifier', '')
+            if not identifier:
+                continue
+            
+            # Get metadata for this item
+            meta_r = req.get(
+                f'https://archive.org/metadata/{identifier}',
+                timeout=10
+            )
+            meta = meta_r.json()
+            files = meta.get('files', [])
+            
+            # Find best video file
+            for f in files:
+                name = f.get('name', '')
+                if name.endswith('.mp4') and int(f.get('size', 0)) < 100*1024*1024:  # under 100MB
+                    vid_url = f'https://archive.org/download/{identifier}/{name}'
+                    dl_path = os.path.join(work_dir, f'archive_{idx}.mp4')
+                    
+                    r2 = req.get(vid_url, stream=True, timeout=120)
+                    downloaded = 0
+                    with open(dl_path, 'wb') as fp:
+                        for chunk in r2.iter_content(chunk_size=65536):
+                            if chunk:
+                                fp.write(chunk)
+                                downloaded += len(chunk)
+                            if downloaded > 50*1024*1024:  # Stop at 50MB
+                                break
+                    
+                    if os.path.exists(dl_path) and os.path.getsize(dl_path) > 100000:
+                        logger.info(f'Archive footage: {dl_path}')
+                        return dl_path, 'archive'
+        return None, None
+    except Exception as e:
+        logger.error(f'Archive error: {e}')
+        return None, None
+
+
+def fetch_pexels_images(query, work_dir, idx, api_key=None):
+    """Fetch free images from Pexels for Ken Burns slideshow."""
+    import requests as req
+    key = api_key or os.environ.get('PEXELS_API_KEY', '')
+    if not key:
+        return []
+    try:
+        r = req.get(
+            'https://api.pexels.com/v1/search',
+            headers={'Authorization': key},
+            params={'query': query, 'per_page': 6},
+            timeout=10
+        )
+        photos = r.json().get('photos', [])
+        urls = [p['src']['large'] for p in photos if p.get('src')]
+        logger.info(f'Pexels images: {len(urls)} for "{query}"')
+        return urls
+    except Exception as e:
+        logger.error(f'Pexels images error: {e}')
+        return []
+
+
 def fetch_github_images(repo_url):
     """Fetch demo images and GIFs from a GitHub repo README."""
     import requests as req
@@ -962,6 +1093,99 @@ def grok_tts(text, output_path, api_key, voice='ara'):
         return False
 
 
+def musetalk_generate_avatar(avatar_image_path, audio_path, output_path):
+    """Generate talking avatar video using MuseTalk on Hugging Face Spaces.
+    Completely free — no API key needed, just HF account optional.
+    Input: avatar image + audio file
+    Output: lip-synced talking video
+    """
+    try:
+        from gradio_client import Client, handle_file
+        import shutil
+
+        # Try multiple MuseTalk spaces in order
+        spaces = [
+            "TMElyralab/MuseTalk",
+            "kevinwang676/MuseTalk1.5", 
+            "fffiloni/MuseTalk",
+        ]
+        
+        hf_token = os.environ.get('HF_TOKEN', '')  # Optional — works without token too
+        
+        for space in spaces:
+            try:
+                logger.info(f'Trying MuseTalk space: {space}')
+                client = Client(space, hf_token=hf_token if hf_token else None)
+                
+                result = client.predict(
+                    avatar_image=handle_file(avatar_image_path),
+                    audio_path=handle_file(audio_path),
+                    api_name="/generate"
+                )
+                
+                # Result is path to generated video
+                if result and os.path.exists(str(result)):
+                    shutil.copy2(str(result), output_path)
+                    logger.info(f'MuseTalk success via {space}')
+                    return True
+                elif isinstance(result, (list, tuple)) and len(result) > 0:
+                    vid = result[0] if isinstance(result[0], str) else result[-1]
+                    if os.path.exists(str(vid)):
+                        shutil.copy2(str(vid), output_path)
+                        return True
+                        
+            except Exception as e:
+                logger.warning(f'MuseTalk {space} failed: {str(e)[:80]}')
+                continue
+        
+        return False
+    except Exception as e:
+        logger.error(f'MuseTalk error: {e}')
+        return False
+
+
+def generate_free_avatar_clip(text, avatar_image_path, output_path, work_dir):
+    """Generate talking avatar clip completely free:
+    1. gTTS converts text to speech (free)
+    2. MuseTalk animates avatar with lip sync (free via HF Spaces)
+    """
+    try:
+        # Step 1: Generate speech with gTTS
+        audio_path = os.path.join(work_dir, 'avatar_speech.mp3')
+        from gtts import gTTS
+        tts = gTTS(text=text[:500], lang='en', slow=False)
+        tts.save(audio_path)
+        
+        if not os.path.exists(audio_path):
+            return False
+        
+        logger.info(f'Avatar speech generated: {os.path.getsize(audio_path)} bytes')
+        
+        # Step 2: Animate with MuseTalk
+        if musetalk_generate_avatar(avatar_image_path, audio_path, output_path):
+            return True
+        
+        # Fallback: just use audio over static image
+        logger.info('MuseTalk failed — using static avatar with audio')
+        result = subprocess.run([
+            'ffmpeg',
+            '-loop', '1', '-i', avatar_image_path,
+            '-i', audio_path,
+            '-vf', f'scale=540:960:force_original_aspect_ratio=increase,crop=540:960,fps=30',
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-c:a', 'aac', '-b:a', '128k',
+            '-shortest', '-movflags', '+faststart',
+            '-pix_fmt', 'yuv420p',
+            '-y', output_path, '-loglevel', 'quiet'
+        ], capture_output=True, timeout=60)
+        
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 10000
+        
+    except Exception as e:
+        logger.error(f'Free avatar error: {e}')
+        return False
+
+
 def aurora_generate_image(prompt, api_key):
     """Generate an avatar image using Grok Aurora image generation."""
     import requests as req
@@ -1287,10 +1511,32 @@ NICHE_CONFIGS = {
     'conspiracy': {
         'name': 'Hidden History',
         'emoji': '👀',
-        'hooks': ['Nobody wants to talk about this', 'They never taught you this in school', 'This was hidden for 50 years'],
-        'x_queries': ['declassified document history', 'hidden history fact'],
-        'youtube_queries': ['declassified secrets documentary', 'hidden history facts'],
-        'angle': 'shocking historical truths'
+        'hooks': [
+            'NOBODY WANTS TO TALK ABOUT THIS',
+            'SINCE NOBODY IS SAYING IT I WILL',
+            'THEY NEVER TAUGHT YOU THIS IN SCHOOL',
+            'THIS WAS HIDDEN FOR 50 YEARS',
+            'THE HISTORY BOOKS LIED TO YOU'
+        ],
+        'x_queries': ['declassified history secret', 'hidden historical fact'],
+        'youtube_queries': ['hidden history documentary', 'declassified secrets explained'],
+        'angle': 'shocking suppressed historical truths and facts nobody talks about',
+        'topic_categories': [
+            'suppressed historical inventions and discoveries',
+            'declassified government secrets and operations',
+            'historical events mainstream media ignores',
+            'ancient civilizations and lost knowledge',
+            'corporate and government cover ups',
+            'banned books and censored information',
+            'colonial America shocking laws and facts',
+            'immigration and diversity hidden history',
+            'famous people dark secrets history never teaches',
+            'money and banking system hidden truths',
+            'food and pharmaceutical industry secrets',
+            'space and NASA declassified documents',
+            'war secrets governments never admitted',
+            'religion and church hidden history',
+        ]
     },
     'finance': {
         'name': 'Finance Secrets',
@@ -1477,8 +1723,12 @@ def process_universal_studio(job_id, params):
             add_log(job_id, config['emoji'] + ' Story ' + str(idx+1) + ': ' + item['title'][:50])
             update_job(job_id, {'progress': 10 + int((idx/len(items))*80)})
 
-            # Build complete Short
-            final_path = build_ai_news_short(job_id, item, work_dir, idx, grok_key, avatar_path)
+            # Build conspiracy Short with mysterious character format
+            character_path = params.get('character_path', '/tmp/xlab_character.jpg')
+            if not os.path.exists(character_path):
+                character_path = '/tmp/xlab_avatar.jpg'
+            final_path = build_conspiracy_short(job_id, item, work_dir, idx, grok_key,
+                                               character_path if os.path.exists(character_path) else None)
 
             if not final_path:
                 add_log(job_id, f'   ❌ Failed — skipping')
@@ -1533,36 +1783,157 @@ def process_universal_studio(job_id, params):
         update_job(job_id, {'status': 'error', 'error': str(e)})
 
 
+def research_topic_wikipedia(topic):
+    """Research a topic using Wikipedia API — completely free, always works."""
+    import requests as req
+    try:
+        # Search Wikipedia
+        search_r = req.get(
+            'https://en.wikipedia.org/w/api.php',
+            params={
+                'action': 'query',
+                'list': 'search',
+                'srsearch': topic,
+                'format': 'json',
+                'srlimit': 3
+            },
+            timeout=10
+        )
+        results = search_r.json().get('query', {}).get('search', [])
+        if not results:
+            return None
+
+        # Get content of top result
+        page_title = results[0]['title']
+        content_r = req.get(
+            'https://en.wikipedia.org/w/api.php',
+            params={
+                'action': 'query',
+                'titles': page_title,
+                'prop': 'extracts',
+                'exintro': True,
+                'explaintext': True,
+                'format': 'json'
+            },
+            timeout=10
+        )
+        pages = content_r.json().get('query', {}).get('pages', {})
+        page = next(iter(pages.values()))
+        extract = page.get('extract', '')[:2000]
+
+        logger.info(f'Wikipedia found: {page_title} ({len(extract)} chars)')
+        return {
+            'title': page_title,
+            'content': extract,
+            'url': f'https://en.wikipedia.org/wiki/{page_title.replace(" ", "_")}'
+        }
+    except Exception as e:
+        logger.error(f'Wikipedia error: {e}')
+        return None
+
+
+def generate_script_from_research(topic, research, api_key, style='conspiracy'):
+    """Turn research into a viral script using AI."""
+    wiki_content = research.get('content', '') if research else ''
+    
+    style_configs = {
+        'conspiracy': {
+            'hook_style': 'NOBODY WANTS TO TALK ABOUT THIS',
+            'tone': 'outraged, shocking, educational',
+            'cta': 'FOLLOW IF YOU WANT THE TRUTH'
+        },
+        'ai_news': {
+            'hook_style': 'This just dropped and nobody knows about it yet',
+            'tone': 'excited, informative, urgent',
+            'cta': 'Follow for daily AI tools'
+        },
+        'history': {
+            'hook_style': 'THEY NEVER TAUGHT YOU THIS IN SCHOOL',
+            'tone': 'dramatic, revelatory, factual',
+            'cta': 'Follow for hidden history'
+        }
+    }
+    
+    cfg = style_configs.get(style, style_configs['conspiracy'])
+    
+    prompt = f"""Create a viral 30-second Short script about: "{topic}"
+
+Research context:
+{wiki_content[:800]}
+
+Style: {cfg['tone']}
+Hook style: "{cfg['hook_style']}"
+CTA: "{cfg['cta']}"
+
+Reply ONLY with valid JSON:
+{{"title": "HOOK IN CAPS UNDER 60 CHARS",
+  "hook": "Opening line that shocks in 2 seconds",
+  "script": "Punchy 30 second script with shocking facts",
+  "key_facts": ["Fact 1", "Fact 2", "Fact 3"],
+  "search_query": "YouTube search for documentary footage",
+  "text_overlays": ["LINE 1 IN CAPS", "LINE 2", "LINE 3"],
+  "hashtags": ["#shorts", "#viral", "#didyouknow"]
+}}"""
+
+    text = call_grok(prompt, api_key)
+    if not text:
+        text = call_gemini_free(prompt)
+    if not text:
+        return None
+    
+    try:
+        text = text.replace('```json','').replace('```','').strip()
+        start = text.find('{')
+        end = text.rfind('}') + 1
+        if start >= 0 and end > start:
+            return json.loads(text[start:end])
+    except Exception as e:
+        logger.error(f'Script parse error: {e}')
+    return None
+
+
 def analyze_viral_blueprint(channel_handle, api_key):
-    """Analyze what topics/hooks work best in a niche by studying top performing content."""
-    prompt = f"""Analyze the content style of TikTok conspiracy channels like @conspiracy_peterx.
+    """Generate viral conspiracy content based on proven topic categories."""
+    import random
+    config = NICHE_CONFIGS.get('conspiracy', {})
+    categories = config.get('topic_categories', ['hidden history facts'])
+    # Pick 3 random topic categories to keep content fresh
+    selected = random.sample(categories, min(3, len(categories)))
+    
+    hooks_str = '\n'.join(['- ' + h for h in config.get('hooks', [])])
+    
+    prompt = f"""You are a viral conspiracy content creator. Research and generate shocking but FACTUAL content.
 
-Their viral formula:
-- Hook: "NOBODY WANTS TO TALK ABOUT THIS" or "SINCE NOBODY IS SAYING IT I WILL"
-- Topics: Historical facts, hidden truths, things mainstream media ignores
-- Format: Short punchy sentences, bold text overlays, dramatic delivery
-- Length: 30-60 seconds
-- Tone: Confident, slightly outraged, educational
+Use these proven viral hook styles:
+{hooks_str}
 
-Generate 5 original conspiracy/mystery topics that would go viral using this exact formula.
-Topics should be FACTUAL — real historical events, declassified documents, genuine mysteries.
-NOT fake news or harmful misinformation.
+Research these specific topic areas and find the most shocking TRUE facts:
+- {selected[0]}
+- {selected[1]}  
+- {selected[2]}
+
+Rules:
+- ONLY real verified historical facts — no fake news or misinformation
+- Each fact must be genuinely surprising and provable
+- Write in the style: short punchy sentences, outraged tone, "they don't want you to know"
+- Perfect for 30 second Shorts
 
 Reply ONLY with valid JSON:
 {{"items": [
   {{
-    "title": "HOOK TEXT IN CAPS — under 60 chars",
-    "topic": "The actual factual story",
-    "hook": "Opening line that grabs attention",
-    "script": "30 second punchy script — facts only, dramatic delivery",
-    "key_facts": ["Fact 1", "Fact 2", "Fact 3"],
-    "search_query": "YouTube search for B-roll footage",
-    "text_overlays": ["LINE 1 IN CAPS", "LINE 2", "LINE 3"],
-    "hashtags": ["#conspiracy", "#history", "#didyouknow", "#facts"]
+    "title": "HOOK IN CAPS UNDER 60 CHARS",
+    "hook": "Opening line — must shock in 2 seconds",
+    "script": "30 second script — punchy facts, dramatic, educational",
+    "key_facts": ["Shocking fact 1", "Shocking fact 2", "Shocking fact 3"],
+    "search_query": "YouTube documentary search for this topic",
+    "text_overlays": ["LINE 1 IN CAPS", "KEY FACT LINE 2", "SHOCKING LINE 3"],
+    "hashtags": ["#conspiracy", "#history", "#didyouknow", "#facts", "#truth"]
   }}
 ]}}"""
 
     text = call_grok(prompt, api_key)
+    if not text:
+        text = call_gemini_free(prompt)
     if not text:
         return None
     try:
@@ -1672,53 +2043,121 @@ def fetch_website_screenshot(url, work_dir, idx):
     return None, None
 
 
+def fetch_wikipedia_images(topic, work_dir, idx):
+    """Fetch real historical images from Wikipedia — free, factual, credible."""
+    import requests as req
+    try:
+        # Search Wikipedia for images related to topic
+        r = req.get(
+            'https://en.wikipedia.org/w/api.php',
+            params={
+                'action': 'query',
+                'generator': 'search',
+                'gsrsearch': topic,
+                'gsrlimit': 3,
+                'prop': 'images',
+                'imlimit': 5,
+                'format': 'json'
+            },
+            timeout=10
+        )
+        pages = r.json().get('query', {}).get('pages', {})
+        image_names = []
+        for page in pages.values():
+            for img in page.get('images', []):
+                name = img.get('title', '')
+                if any(ext in name.lower() for ext in ['.jpg', '.jpeg', '.png']):
+                    if not any(x in name.lower() for x in ['icon', 'logo', 'flag', 'map']):
+                        image_names.append(name)
+
+        # Get actual image URLs
+        image_urls = []
+        for name in image_names[:4]:
+            try:
+                img_r = req.get(
+                    'https://en.wikipedia.org/w/api.php',
+                    params={
+                        'action': 'query',
+                        'titles': name,
+                        'prop': 'imageinfo',
+                        'iiprop': 'url',
+                        'format': 'json'
+                    },
+                    timeout=10
+                )
+                img_pages = img_r.json().get('query', {}).get('pages', {})
+                for p in img_pages.values():
+                    url = p.get('imageinfo', [{}])[0].get('url', '')
+                    if url:
+                        image_urls.append(url)
+            except: continue
+
+        logger.info(f'Wikipedia images: {len(image_urls)} for "{topic}"')
+        return image_urls
+    except Exception as e:
+        logger.error(f'Wikipedia images error: {e}')
+        return []
+
+
 def smart_fetch_visuals(item, work_dir, idx):
-    """Smart visual fetching with 6 fallbacks — always finds something."""
+    """Smart visual fetching — real content only, completely free."""
+    import re
     title = item.get('title', '')
-    
-    # 1. YouTube demo
-    add_log_safe(f'   🔍 Searching YouTube demo...')
-    result, source = fetch_best_visuals(item, work_dir, idx)
+    search_q = item.get('search_query', title)
+    text = item.get('script', '') + item.get('x_source', '')
+
+    # 1. Internet Archive — real historical footage (free, public domain)
+    add_log_safe('   📚 Searching Internet Archive...')
+    result, source = fetch_internet_archive_footage(search_q, work_dir, idx)
     if result:
-        return result, source
-    
-    # 2. X post images
+        try:
+            dur = get_duration(result)
+            start = max(0, dur * 0.1)
+            cut_path = f'{work_dir}/cut_archive_{idx}.mp4'
+            cut_vertical(result, start, 30, cut_path, is_vertical(result))
+            if os.path.exists(cut_path) and os.path.getsize(cut_path) > 100000:
+                return cut_path, 'archive'
+        except:
+            return result, 'archive'
+
+    # 2. Wikipedia images → Ken Burns slideshow (real historical photos)
+    add_log_safe('   🖼️ Searching Wikipedia images...')
+    wiki_imgs = fetch_wikipedia_images(search_q, work_dir, idx)
+    if wiki_imgs:
+        img_vid = f'{work_dir}/wiki_imgs_{idx}.mp4'
+        if create_video_from_images(wiki_imgs, img_vid, duration_each=7):
+            return img_vid, 'wikipedia'
+
+    # 3. X post images (real screenshots from original posts)
     x_images = item.get('images', [])
     if x_images:
-        add_log_safe(f'   🖼️ Using X post images...')
         img_vid = f'{work_dir}/ximg_{idx}.mp4'
         if create_video_from_images(x_images, img_vid):
             return img_vid, 'x_images'
-    
-    # 3. GitHub screenshots
-    text = item.get('script', '') + item.get('x_source', '')
-    import re
-    gh_match = re.search(r'github\.com/[^\s\)"]+', text)
-    if gh_match:
-        gh_url = 'https://' + gh_match.group(0)
-        gh_images = fetch_github_images(gh_url)
-        if gh_images:
-            gh_vid = f'{work_dir}/ghimg_{idx}.mp4'
-            if create_video_from_images(gh_images, gh_vid):
-                return gh_vid, 'github'
-    
-    # 4. Google image search
-    add_log_safe(f'   🔍 Searching Google images...')
-    result, source = fetch_tool_screenshots(title, work_dir, idx)
-    if result:
-        return result, source
-    
-    # 5. Website screenshot
-    # Try to find tool URL from script
+
+    # 4. Website screenshot (official source)
     url_match = re.search(r'https?://[^\s\)"]+\.[a-z]{2,}', text)
     if url_match:
         result, source = fetch_website_screenshot(url_match.group(0), work_dir, idx)
         if result:
             return result, source
-    
-    # 6. Pure avatar — no demo needed, avatar talks entire video
-    return None, 'avatar_only'
 
+    # 5. GitHub screenshots (for tech content)
+    gh_match = re.search(r'github\.com/[^\s\)"]+', text)
+    if gh_match:
+        gh_images = fetch_github_images('https://' + gh_match.group(0))
+        if gh_images:
+            gh_vid = f'{work_dir}/ghimg_{idx}.mp4'
+            if create_video_from_images(gh_images, gh_vid):
+                return gh_vid, 'github'
+
+    # 6. YouTube as absolute last resort
+    add_log_safe('   📹 Trying YouTube...')
+    result, source = fetch_best_visuals(item, work_dir, idx)
+    if result:
+        return result, source
+
+    return None, 'avatar_only'
 
 def add_log_safe(msg):
     """Log without job_id — used in utility functions."""
@@ -1736,28 +2175,43 @@ def build_ai_news_short(job_id, item, work_dir, idx, grok_key, avatar_path=None)
     hook = item.get('hook', f'This AI just dropped and nobody is talking about it')
     script = item.get('script', '')
     
-    # ── Part 1: Hook title card (free — no Aurora needed) ────
-    add_log(job_id, f'   🎬 Creating hook title card...')
-    try:
-        # Create a simple hook title card using ffmpeg
-        hook_card = f'{work_dir}/hook_{idx}.mp4'
-        safe_hook = hook[:60].replace("'","").replace('"','').replace(':','')
-        subprocess.run([
-            'ffmpeg', '-f', 'lavfi',
-            '-i', f'color=c=black:size=1080x1920:duration=4:rate=30',
-            '-vf', (f"drawtext=text='{safe_hook}':fontsize=52:fontcolor=white:"
-                   f"x=(w-text_w)/2:y=(h-text_h)/2:fontweight=bold:"
-                   f"box=1:boxcolor=black@0.5:boxborderw=20,"
-                   f"drawtext=text='XLAB':fontsize=24:fontcolor=red:alpha=0.8:"
-                   f"x=w-tw-20:y=20:fontweight=bold"),
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
-            '-pix_fmt', 'yuv420p', '-y', hook_card, '-loglevel', 'quiet'
-        ], capture_output=True, timeout=30)
-        if os.path.exists(hook_card) and os.path.getsize(hook_card) > 10000:
-            clips.append(hook_card)
-            add_log(job_id, f'   ✅ Hook card ready')
-    except Exception as e:
-        add_log(job_id, f'   ⚠️ Hook card error: {str(e)[:40]}')
+    # ── Part 1: Free avatar intro (MuseTalk lip sync) ─────────
+    add_log(job_id, f'   🎭 Generating free avatar intro...')
+    avatar_path = '/tmp/xlab_avatar.jpg'
+    intro_done = False
+    
+    if os.path.exists(avatar_path):
+        try:
+            intro_text = f"{hook}. {script[:120]}"
+            avatar_clip = f'{work_dir}/avatar_intro_{idx}.mp4'
+            if generate_free_avatar_clip(intro_text, avatar_path, avatar_clip, work_dir):
+                norm_path = f'{work_dir}/norm_intro_{idx}.mp4'
+                if normalize_clip(avatar_clip, norm_path):
+                    clips.append(norm_path)
+                    add_log(job_id, f'   ✅ Avatar intro ready (lip synced)')
+                    intro_done = True
+        except Exception as e:
+            add_log(job_id, f'   ⚠️ Avatar error: {str(e)[:40]}')
+    
+    if not intro_done:
+        # Fallback: title card
+        try:
+            hook_card = f'{work_dir}/hook_{idx}.mp4'
+            safe_hook = hook[:55].replace("'","").replace('"','').replace(':','')
+            subprocess.run([
+                'ffmpeg', '-f', 'lavfi',
+                '-i', 'color=c=black:size=1080x1920:duration=4:rate=30',
+                '-vf', (f"drawtext=text='{safe_hook}':fontsize=52:fontcolor=white:"
+                       f"x=(w-text_w)/2:y=(h-text_h)/2:fontweight=bold:"
+                       f"box=1:boxcolor=black@0.5:boxborderw=20"),
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                '-pix_fmt', 'yuv420p', '-y', hook_card, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=30)
+            if os.path.exists(hook_card) and os.path.getsize(hook_card) > 10000:
+                clips.append(hook_card)
+                add_log(job_id, f'   ✅ Hook card ready')
+        except Exception as e:
+            add_log(job_id, f'   ⚠️ Hook card error: {str(e)[:40]}')
     
     # ── Part 2: Demo footage middle (8-22s) ───────────────────
     add_log(job_id, f'   🎬 Finding best demo footage...')
@@ -1791,33 +2245,44 @@ def build_ai_news_short(job_id, item, work_dir, idx, grok_key, avatar_path=None)
             clips.append(demo_path)  # use raw clip even if processing fails
     
     # ── Part 3: Avatar CTA outro (22-30s) ─────────────────────
-    # ── Part 3: Free CTA card ─────────────────────────────────
-    add_log(job_id, f'   🎬 Creating CTA card...')
-    try:
-        affiliate = get_affiliate_info(title)
-        cta_line = 'FOLLOW FOR DAILY AI TOOLS'
-        sub_line = 'New video every day 👀'
-        if affiliate and affiliate.get('commission') not in ('N/A', None):
-            sub_line = 'Link in bio — ' + affiliate['commission'] + ' commission'
+    # ── Part 3: Free avatar CTA ───────────────────────────────
+    add_log(job_id, f'   🎭 Generating CTA...')
+    cta_done = False
+    affiliate = get_affiliate_info(title)
+    cta_text = 'Follow for daily AI tools and hacks. New video every day.'
+    if affiliate and affiliate.get('commission') not in ('N/A', None):
+        cta_text = f"Follow for daily AI tools. Check the link in bio for {affiliate['commission']} commission deals."
 
-        cta_card = f'{work_dir}/cta_{idx}.mp4'
-        subprocess.run([
-            'ffmpeg', '-f', 'lavfi',
-            '-i', 'color=c=black:size=1080x1920:duration=3:rate=30',
-            '-vf', (f"drawtext=text='{cta_line}':fontsize=48:fontcolor=white:"
-                   f"x=(w-text_w)/2:y=h*0.42:fontweight=bold,"
-                   f"drawtext=text='{sub_line}':fontsize=32:fontcolor=#ff6b5b:"
-                   f"x=(w-text_w)/2:y=h*0.55,"
-                   f"drawtext=text='XLAB':fontsize=24:fontcolor=red:alpha=0.8:"
-                   f"x=w-tw-20:y=20:fontweight=bold"),
-            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
-            '-pix_fmt', 'yuv420p', '-y', cta_card, '-loglevel', 'quiet'
-        ], capture_output=True, timeout=30)
-        if os.path.exists(cta_card) and os.path.getsize(cta_card) > 10000:
-            clips.append(cta_card)
-            add_log(job_id, f'   ✅ CTA card ready')
-    except Exception as e:
-        add_log(job_id, f'   ⚠️ CTA card error: {str(e)[:40]}')
+    if os.path.exists(avatar_path):
+        try:
+            cta_clip = f'{work_dir}/avatar_cta_{idx}.mp4'
+            if generate_free_avatar_clip(cta_text, avatar_path, cta_clip, work_dir):
+                norm_cta = f'{work_dir}/norm_cta_{idx}.mp4'
+                if normalize_clip(cta_clip, norm_cta):
+                    clips.append(norm_cta)
+                    add_log(job_id, f'   ✅ Avatar CTA ready')
+                    cta_done = True
+        except Exception as e:
+            add_log(job_id, f'   ⚠️ CTA error: {str(e)[:40]}')
+    
+    if not cta_done:
+        try:
+            cta_card = f'{work_dir}/cta_{idx}.mp4'
+            subprocess.run([
+                'ffmpeg', '-f', 'lavfi',
+                '-i', 'color=c=black:size=1080x1920:duration=3:rate=30',
+                '-vf', ("drawtext=text='FOLLOW FOR DAILY AI TOOLS':fontsize=44:fontcolor=white:"
+                       "x=(w-text_w)/2:y=h*0.45:fontweight=bold,"
+                       "drawtext=text='New video every day':fontsize=30:fontcolor=#ff6b5b:"
+                       "x=(w-text_w)/2:y=h*0.56"),
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                '-pix_fmt', 'yuv420p', '-y', cta_card, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=30)
+            if os.path.exists(cta_card) and os.path.getsize(cta_card) > 10000:
+                clips.append(cta_card)
+                add_log(job_id, f'   ✅ CTA card ready')
+        except Exception as e:
+            add_log(job_id, f'   ⚠️ CTA card error: {str(e)[:40]}')
     
     # If avatar_only mode — generate longer avatar clip with full narration
     if source == 'avatar_only' and avatar_path and grok_key:
@@ -1868,6 +2333,157 @@ def build_ai_news_short(job_id, item, work_dir, idx, grok_key, avatar_path=None)
     return None
 
 
+def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path=None):
+    """Build viral conspiracy Short with mysterious character format:
+    - Character appears (no face shown = mystery)
+    - Bold text reveals shocking facts
+    - Grok/gTTS narrates over footage
+    - Character reappears for CTA
+    """
+    clips = []
+    title = item.get('title', '')
+    hook = item.get('hook', '')
+    script = item.get('script', '')
+    overlays = item.get('text_overlays', [])
+    key_facts = item.get('key_facts', [])
+
+    # ── Part 1: Character intro (3s) ──────────────────────────
+    add_log(job_id, f'   🎭 Creating character intro...')
+    try:
+        char_intro = f'{work_dir}/char_intro_{idx}.mp4'
+        if character_path and os.path.exists(character_path):
+            # Animate character with zoom in effect
+            subprocess.run([
+                'ffmpeg', '-loop', '1', '-i', character_path,
+                '-vf', ('scale=1080:1920:force_original_aspect_ratio=increase,'
+                       'crop=1080:1920,'
+                       'zoompan=z=\'min(zoom+0.002,1.2)\''
+                       ':x=\'iw/2-(iw/zoom/2)\''
+                       ':y=\'ih/2-(ih/zoom/2)\''
+                       ':d=90:s=1080x1920:fps=30'),
+                '-pix_fmt', 'yuv420p', '-y', char_intro, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=30)
+        else:
+            # Black intro card
+            subprocess.run([
+                'ffmpeg', '-f', 'lavfi',
+                '-i', 'color=c=black:size=1080x1920:duration=3:rate=30',
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                '-pix_fmt', 'yuv420p', '-y', char_intro, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=20)
+
+        if os.path.exists(char_intro):
+            clips.append(char_intro)
+            add_log(job_id, f'   ✅ Character intro ready')
+    except Exception as e:
+        add_log(job_id, f'   ⚠️ Intro error: {str(e)[:40]}')
+
+    # ── Part 2: Hook text reveal (3s) ─────────────────────────
+    try:
+        hook_card = f'{work_dir}/hook_card_{idx}.mp4'
+        safe_hook = title[:55].replace("'","").replace('"','').replace(':','')
+        subprocess.run([
+            'ffmpeg', '-f', 'lavfi',
+            '-i', 'color=c=black:size=1080x1920:duration=3:rate=30',
+            '-vf', (f"drawtext=text='{safe_hook}':fontsize=52:fontcolor=white:"
+                   f"x=(w-text_w)/2:y=(h-text_h)/2:fontweight=bold:"
+                   f"box=1:boxcolor=black@0.3:boxborderw=15"),
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-pix_fmt', 'yuv420p', '-y', hook_card, '-loglevel', 'quiet'
+        ], capture_output=True, timeout=20)
+        if os.path.exists(hook_card):
+            clips.append(hook_card)
+    except Exception as e:
+        add_log(job_id, f'   ⚠️ Hook card error: {str(e)[:40]}')
+
+    # ── Part 3: Documentary footage with narration (20s) ──────
+    add_log(job_id, f'   🎬 Finding documentary footage...')
+    demo_path, source = smart_fetch_visuals(item, work_dir, idx)
+
+    if demo_path:
+        try:
+            # Add narration
+            narr_path = f'{work_dir}/narr_{idx}.mp3'
+            narrated = f'{work_dir}/narrated_{idx}.mp4'
+            if text_to_speech(script, narr_path):
+                if overlay_narration(demo_path, narr_path, narrated):
+                    demo_path = narrated
+
+            # Add shocking text overlays
+            overlay_out = f'{work_dir}/overlay_{idx}.mp4'
+            facts_to_show = (overlays or key_facts)[:3]
+            if add_text_overlays(demo_path, overlay_out, title, hook, facts_to_show, ''):
+                demo_path = overlay_out
+
+            clips.append(demo_path)
+            add_log(job_id, f'   ✅ Footage ready — {source}')
+        except Exception as e:
+            clips.append(demo_path)
+            add_log(job_id, f'   ⚠️ Footage processing: {str(e)[:40]}')
+
+    # ── Part 4: Character CTA (3s) ────────────────────────────
+    try:
+        cta_card = f'{work_dir}/cta_{idx}.mp4'
+        if character_path and os.path.exists(character_path):
+            subprocess.run([
+                'ffmpeg', '-loop', '1', '-i', character_path,
+                '-vf', (f'scale=1080:1920:force_original_aspect_ratio=increase,'
+                       f'crop=1080:1920,'
+                       f"drawtext=text='FOLLOW IF YOU WANT THE TRUTH':fontsize=40:"
+                       f"fontcolor=white:x=(w-text_w)/2:y=h*0.85:fontweight=bold:"
+                       f"box=1:boxcolor=black@0.6:boxborderw=12"),
+                '-t', '3', '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                '-pix_fmt', 'yuv420p', '-y', cta_card, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=30)
+        else:
+            subprocess.run([
+                'ffmpeg', '-f', 'lavfi',
+                '-i', 'color=c=black:size=1080x1920:duration=3:rate=30',
+                '-vf', ("drawtext=text='FOLLOW IF YOU WANT THE TRUTH':fontsize=44:"
+                       "fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:fontweight=bold"),
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                '-pix_fmt', 'yuv420p', '-y', cta_card, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=20)
+
+        if os.path.exists(cta_card):
+            clips.append(cta_card)
+            add_log(job_id, f'   ✅ CTA ready')
+    except Exception as e:
+        add_log(job_id, f'   ⚠️ CTA error: {str(e)[:40]}')
+
+    if not clips:
+        return None
+
+    # Assemble with crossfades
+    add_log(job_id, f'   🎬 Assembling {len(clips)} parts...')
+    if len(clips) == 1:
+        final_path = f'{work_dir}/final_{idx}.mp4'
+        import shutil
+        shutil.copy2(clips[0], final_path)
+    else:
+        current = clips[0]
+        for ci, nxt in enumerate(clips[1:]):
+            faded = f'{work_dir}/faded_{idx}_{ci}.mp4'
+            if not add_crossfade_transition(current, nxt, faded, 0.3):
+                merged = f'{work_dir}/merged_{idx}_{ci}.mp4'
+                concatenate_clips([current, nxt], merged)
+                current = merged
+            else:
+                current = faded
+        final_path = current
+
+    if os.path.exists(final_path):
+        # Add dramatic music
+        music_out = f'{work_dir}/music_{idx}.mp4'
+        if add_trending_music(final_path, music_out, 'dramatic', 0.15):
+            final_path = music_out
+        size = os.path.getsize(final_path) / (1024*1024)
+        add_log(job_id, f'   ✅ Conspiracy Short ready ({size:.1f}MB)')
+        return final_path
+
+    return None
+
+
 def process_conspiracy_studio(job_id, params):
     """Generate viral conspiracy/mystery Shorts using the proven blueprint."""
     work_dir = f'/tmp/conspiracy_{job_id}'
@@ -1883,12 +2499,25 @@ def process_conspiracy_studio(job_id, params):
         if not grok_key:
             raise Exception('Grok API key required')
 
-        add_log(job_id, '🔍 Analyzing viral blueprint...')
+        custom_topic = params.get('custom_topic', '').strip()
+        add_log(job_id, '🔍 Researching content...')
         update_job(job_id, {'progress': 5})
 
-        data = analyze_viral_blueprint('@conspiracy_peterx', grok_key)
-        if not data or not data.get('items'):
-            raise Exception('Could not generate topics')
+        if custom_topic:
+            # Research specific topic with Wikipedia + AI
+            add_log(job_id, f'   📚 Researching: {custom_topic[:50]}')
+            research = research_topic_wikipedia(custom_topic)
+            item = generate_script_from_research(custom_topic, research, grok_key, 'conspiracy')
+            if item:
+                data = {'items': [item] * min(max_videos, 3)}
+                add_log(job_id, f'   ✅ Script ready: {item.get("title","")[:50]}')
+            else:
+                raise Exception(f'Could not generate script for: {custom_topic}')
+        else:
+            # Auto-find viral topics
+            data = analyze_viral_blueprint('@conspiracy_peterx', grok_key)
+            if not data or not data.get('items'):
+                raise Exception('Could not generate topics')
 
         items = data['items'][:max_videos]
         add_log(job_id, f'✅ Generated {len(items)} topics')
@@ -3903,6 +4532,51 @@ def list_grok_models():
             timeout=10
         )
         return jsonify(r.json())
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
+
+@app.route('/api/research-topic', methods=['POST'])
+def research_and_generate():
+    """Research any topic and generate a viral script."""
+    data = request.json or {}
+    topic = data.get('topic', '')
+    style = data.get('style', 'conspiracy')
+    if not topic:
+        return jsonify({'error': 'Topic required'})
+    
+    grok_key = os.environ.get('GROK_API_KEY', '').strip()
+    
+    # Research with Wikipedia first (free, always works)
+    research = research_topic_wikipedia(topic)
+    
+    # Generate script
+    result = generate_script_from_research(topic, research, grok_key, style)
+    
+    if result:
+        result['wikipedia_source'] = research.get('url', '') if research else ''
+        return jsonify({'success': True, 'item': result})
+    return jsonify({'error': 'Script generation failed'})
+
+
+@app.route('/api/save-character', methods=['POST'])
+def save_character():
+    """Save mystery character image for conspiracy content."""
+    import requests as req
+    data = request.json or {}
+    image_data = data.get('image_data', '')
+    if not image_data:
+        return jsonify({'error': 'No image data'})
+    try:
+        import base64
+        if ',' in image_data:
+            image_data = image_data.split(',')[1]
+        img_bytes = base64.b64decode(image_data)
+        char_path = '/tmp/xlab_character.jpg'
+        with open(char_path, 'wb') as f:
+            f.write(img_bytes)
+        return jsonify({'success': True, 'path': char_path,
+                       'size': os.path.getsize(char_path)})
     except Exception as e:
         return jsonify({'error': str(e)})
 

@@ -2489,6 +2489,40 @@ def fetch_wikipedia_images(topic, work_dir, idx):
         return []
 
 
+def generate_better_search_query(topic, style='conspiracy'):
+    """Generate specific search queries for footage based on topic and style."""
+    base = ' '.join(topic.lower().replace('nobody talks about','').strip().split()[:4])
+    queries = {
+        'conspiracy': [
+            base + ' documentary exposed',
+            base + ' surveillance evidence',
+            base + ' hidden truth revealed',
+            base + ' investigation',
+        ],
+        'ai_tools': [
+            base + ' demo tutorial',
+            base + ' how to use 2025',
+            base + ' review walkthrough',
+        ],
+        'ai_news': [
+            base + ' demo tutorial',
+            base + ' how to use 2025',
+            base + ' review',
+        ],
+        'history': [
+            base + ' historical documentary',
+            base + ' history explained',
+            base + ' archive footage',
+        ],
+        'finance': [
+            base + ' explained documentary',
+            base + ' financial truth',
+            base + ' money secret revealed',
+        ],
+    }
+    return queries.get(style, [base + ' documentary', base + ' explained'])
+
+
 def smart_fetch_visuals(item, work_dir, idx):
     """Smart visual fetching — YouTube first for relevance, Archive as fallback."""
     import re
@@ -2525,7 +2559,19 @@ def smart_fetch_visuals(item, work_dir, idx):
                     except Exception as e:
                         logger.error(f'YouTube cut: {e}')
 
-    # 2. Internet Archive — historical footage fallback
+    # 2. Wikipedia images — always topic-relevant, free, instant
+    add_log_safe('   🖼️ Searching Wikipedia images...')
+    wiki_imgs = fetch_wikipedia_images(search_q, work_dir, idx)
+    if not wiki_imgs:
+        # Try shorter query
+        wiki_imgs = fetch_wikipedia_images(' '.join(search_q.split()[:2]), work_dir, idx)
+    if wiki_imgs:
+        add_log_safe(f'   ✅ Wikipedia: {len(wiki_imgs)} images found')
+        img_vid = f'{work_dir}/wiki_imgs_{idx}.mp4'
+        if create_video_from_images(wiki_imgs, img_vid, duration_each=7):
+            return img_vid, 'wikipedia'
+
+    # 3. Internet Archive — historical footage (may not be relevant)
     add_log_safe('   📚 Searching Internet Archive...')
     archive_queries = [search_q + ' documentary', ' '.join(search_q.split()[:3]), search_q]
     result, source = None, None
@@ -2549,14 +2595,7 @@ def smart_fetch_visuals(item, work_dir, idx):
         except:
             return result, 'archive'
 
-    # 2. Wikipedia images → Ken Burns slideshow (real historical photos)
-    add_log_safe('   🖼️ Searching Wikipedia images...')
-    wiki_imgs = fetch_wikipedia_images(search_q, work_dir, idx)
-    if wiki_imgs:
-        img_vid = f'{work_dir}/wiki_imgs_{idx}.mp4'
-        if create_video_from_images(wiki_imgs, img_vid, duration_each=7):
-            return img_vid, 'wikipedia'
-
+    # 4. X post images
     # 3. X post images (real screenshots from original posts)
     x_images = item.get('images', [])
     if x_images:
@@ -2585,6 +2624,48 @@ def smart_fetch_visuals(item, work_dir, idx):
     result, source = fetch_best_visuals(item, work_dir, idx)
     if result:
         return result, source
+
+    # GUARANTEED FALLBACK — close up clip loops talking about the topic
+    add_log_safe('   🎭 No footage — character talks full script...')
+    try:
+        # Use close up (general) clip specifically for talking loop
+        char_clip = (get_character_clip('general') or  # close up talking
+                     get_character_clip('walk') or      # walking clip
+                     get_character_clip('hook'))        # hook clip last resort
+        
+        if char_clip:
+            script = item.get('script', item.get('hook', title))
+            char_loop = os.path.join(work_dir, f'char_loop_{idx}.mp4')
+            
+            # Generate voice for the full script
+            narr_path = os.path.join(work_dir, f'script_narr_{idx}.mp3')
+            text_to_speech(script, narr_path, style='conspiracy')
+            
+            # Get narration duration
+            narr_dur = get_duration(narr_path) if os.path.exists(narr_path) else 25
+            narr_dur = max(narr_dur, 10)
+            
+            # Loop character for narration duration
+            subprocess.run([
+                'ffmpeg', '-stream_loop', '-1', '-i', char_clip,
+                '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30',
+                '-t', str(narr_dur),
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                '-pix_fmt', 'yuv420p', '-an',
+                '-y', char_loop, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=60)
+            
+            if os.path.exists(char_loop):
+                # Add narration over looped character
+                if os.path.exists(narr_path):
+                    final_loop = os.path.join(work_dir, f'char_loop_voiced_{idx}.mp4')
+                    if overlay_narration(char_loop, narr_path, final_loop):
+                        add_log_safe('   ✅ Character talking with full script')
+                        return final_loop, 'character_loop'
+                add_log_safe('   ✅ Character loop ready')
+                return char_loop, 'character_loop'
+    except Exception as e:
+        logger.error(f'Character loop error: {e}')
 
     return None, 'avatar_only'
 

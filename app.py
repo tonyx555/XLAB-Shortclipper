@@ -1011,6 +1011,68 @@ def post_to_x(video_path, text, api_key, api_secret, access_token, access_token_
         return None
 
 
+def call_groq_free(prompt, api_key=None):
+    """Call Groq API for text generation — free tier, no credits needed.
+    Uses Llama 3.3 70B — excellent quality, 6000 requests/day free.
+    """
+    import requests as req
+    key = (api_key or os.environ.get('GROQ_API_KEY', '')).strip()
+    if not key:
+        return None
+    try:
+        r = req.post(
+            'https://api.groq.com/openai/v1/chat/completions',
+            headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
+            json={
+                'model': 'llama-3.3-70b-versatile',
+                'messages': [{'role': 'user', 'content': prompt}],
+                'max_tokens': 2000,
+                'temperature': 0.7
+            },
+            timeout=30
+        )
+        data = r.json()
+        if 'choices' in data:
+            return data['choices'][0]['message']['content']
+        logger.error(f'Groq free error: {str(data)[:100]}')
+        return None
+    except Exception as e:
+        logger.error(f'Groq free error: {e}')
+        return None
+
+
+def groq_tts(text, output_path, api_key=None, voice='zeus'):
+    """Generate high quality TTS using Groq Orpheus — free tier.
+    Supports emotion tags: [dramatic], [whisper], [cheerful], [dark chuckle]
+    Voices: troy, austin, zeus, nova (English)
+    """
+    import requests as req
+    key = (api_key or os.environ.get('GROQ_API_KEY', '')).strip()
+    if not key:
+        return False
+    try:
+        r = req.post(
+            'https://api.groq.com/openai/v1/audio/speech',
+            headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
+            json={
+                'model': 'canopylabs/orpheus-v1-english',
+                'input': text[:1000],
+                'voice': voice,
+                'response_format': 'wav'
+            },
+            timeout=30
+        )
+        if r.status_code == 200:
+            with open(output_path, 'wb') as f:
+                f.write(r.content)
+            return os.path.exists(output_path) and os.path.getsize(output_path) > 1000
+        logger.error(f'Groq TTS error: {r.status_code} {r.text[:100]}')
+        return False
+    except Exception as e:
+        logger.error(f'Groq TTS error: {e}')
+        return False
+
+
 def call_gemini_free(prompt, api_key=None):
     """Call Gemini API - completely free tier available.
     Get key at aistudio.google.com
@@ -1067,6 +1129,11 @@ def call_grok(prompt, api_key):
         except Exception as e:
             logger.error(f'Grok {model} error: {e}')
     
+    # Try Groq free (groq.com — different from xAI Grok)
+    groq_result = call_groq_free(prompt)
+    if groq_result:
+        return groq_result
+
     # Final fallback to Gemini
     logger.info('Falling back to Gemini for text generation')
     return call_gemini_free(prompt)
@@ -2786,15 +2853,40 @@ def process_conspiracy_studio(job_id, params):
         update_job(job_id, {'progress': 5})
 
         if custom_topic:
-            # Research specific topic with Wikipedia + AI
             add_log(job_id, f'   📚 Researching: {custom_topic[:50]}')
+            
+            # Research with web
             research = research_topic_web(custom_topic)
-            item = generate_script_from_research(custom_topic, research, grok_key, 'conspiracy')
-            if item:
-                data = {'items': [item] * min(max_videos, 3)}
-                add_log(job_id, f'   ✅ Script ready: {item.get("title","")[:50]}')
-            else:
-                raise Exception(f'Could not generate script for: {custom_topic}')
+            research_content = research.get('content', '') if research else ''
+            
+            item = None
+            
+            # Try Claude first
+            anthropic_key = os.environ.get('ANTHROPIC_API_KEY', '').strip()
+            if anthropic_key:
+                item = generate_script_with_claude(custom_topic, research_content, 'conspiracy')
+            
+            # Try Gemini
+            if not item:
+                gemini_key = (os.environ.get('GEMINI_API_KEY','') or os.environ.get('CLAUDE_API_KEY','')).strip()
+                if gemini_key and gemini_key.startswith('AIza'):
+                    item = generate_script_from_research(custom_topic, research, gemini_key, 'conspiracy')
+            
+            # Always generate something — even without AI
+            if not item:
+                add_log(job_id, f'   ⚠️ No AI key — using built-in template')
+                item = {
+                    'title': f'NOBODY TALKS ABOUT {custom_topic.upper()[:40]}',
+                    'hook': f'What they never told you about {custom_topic}',
+                    'script': f'Here is the shocking truth about {custom_topic} that mainstream media refuses to cover. The facts will blow your mind.',
+                    'key_facts': [f'The truth about {custom_topic}', 'This was hidden from you', 'Share before its deleted'],
+                    'search_query': custom_topic + ' documentary history',
+                    'text_overlays': [custom_topic.upper()[:40], 'THE HIDDEN TRUTH', 'NOBODY TALKS ABOUT THIS'],
+                    'hashtags': ['#conspiracy', '#truth', '#didyouknow', '#shorts', '#viral']
+                }
+            
+            data = {'items': [item] * min(max_videos, 3)}
+            add_log(job_id, f'   ✅ Script ready: {item.get("title","")[:50]}')
         else:
             # Auto-find viral topics
             data = analyze_viral_blueprint('@conspiracy_peterx', grok_key)
@@ -3224,8 +3316,30 @@ def process_grok_original_video(job_id, params):
         update_job(job_id, {'status': 'error', 'error': str(e)})
 
 
-def text_to_speech(text, output_path):
-    """Convert text to speech using gTTS (free, no API key needed)."""
+def text_to_speech(text, output_path, style='normal'):
+    """Convert text to speech — Groq Orpheus first (best quality), gTTS fallback."""
+    groq_key = os.environ.get('GROQ_API_KEY', '').strip()
+    
+    # Add dramatic style tags for conspiracy content
+    if style == 'conspiracy' and groq_key:
+        styled = f'[dramatic] {text}'
+    else:
+        styled = text
+
+    # Try Groq Orpheus TTS first — much better quality
+    if groq_key:
+        wav_path = output_path.replace('.mp3', '.wav')
+        if groq_tts(styled, wav_path, groq_key, voice='zeus'):
+            # Convert wav to mp3 for compatibility
+            result = subprocess.run([
+                'ffmpeg', '-i', wav_path, '-acodec', 'libmp3lame',
+                '-q:a', '2', '-y', output_path, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=30)
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                logger.info('Groq Orpheus TTS success')
+                return True
+
+    # Fallback to gTTS (always works, no key needed)
     try:
         from gtts import gTTS
         tts = gTTS(text=text, lang='en', slow=False)
@@ -4917,13 +5031,13 @@ def research_and_generate():
         if result:
             debug['script_ai'] = 'gemini'
 
-    # Fallback to Grok if Gemini fails
+    # Fallback to Groq free (groq.com)
     if not result:
-        grok_key = os.environ.get('GROK_API_KEY', '').strip()
-        if grok_key:
-            result = generate_script_from_research(topic, research, grok_key, style)
+        groq_free_key = os.environ.get('GROQ_API_KEY', '').strip()
+        if groq_free_key:
+            result = generate_script_from_research(topic, research, groq_free_key, style)
             if result:
-                debug['script_ai'] = 'grok'
+                debug['script_ai'] = 'groq_free'
 
     # Last resort - basic script without AI
     if not result:

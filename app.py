@@ -5176,6 +5176,53 @@ def list_grok_models():
         return jsonify({'error': str(e)})
 
 
+@app.route('/api/preview/<job_id>', methods=['GET'])
+def preview_video(job_id):
+    """Stream video directly in browser for preview."""
+    job = JOBS.get(job_id, {})
+    zip_path = job.get('zip_path', '')
+    
+    # Try to find the MP4 directly
+    work_dirs = [
+        f'/tmp/conspiracy_{job_id}',
+        f'/tmp/universal_{job_id}',
+        f'/tmp/ainews_{job_id}',
+        f'/tmp/studio_{job_id}',
+    ]
+    
+    mp4_path = None
+    for d in work_dirs:
+        if os.path.exists(d):
+            for f in os.listdir(d):
+                if f.endswith('.mp4') and 'compressed' in f:
+                    mp4_path = os.path.join(d, f)
+                    break
+            if not mp4_path:
+                for f in sorted(os.listdir(d)):
+                    if f.endswith('.mp4') and os.path.getsize(os.path.join(d, f)) > 1000000:
+                        mp4_path = os.path.join(d, f)
+                        break
+        if mp4_path:
+            break
+    
+    if not mp4_path and zip_path and os.path.exists(zip_path):
+        # Extract from ZIP
+        import zipfile as zf
+        with zf.ZipFile(zip_path) as z:
+            for name in z.namelist():
+                if name.endswith('.mp4'):
+                    extract_dir = os.path.dirname(zip_path)
+                    z.extract(name, extract_dir)
+                    mp4_path = os.path.join(extract_dir, name)
+                    break
+    
+    if not mp4_path or not os.path.exists(mp4_path):
+        return "Video not found", 404
+    
+    from flask import send_file
+    return send_file(mp4_path, mimetype='video/mp4', as_attachment=False)
+
+
 @app.route('/api/test-research', methods=['GET'])
 def test_research():
     topic = request.args.get('topic', 'Colonial America farming laws')

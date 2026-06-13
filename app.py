@@ -658,9 +658,11 @@ def normalize_clip(input_path, output_path, color_grade=True):
 
         result = subprocess.run([
             'ffmpeg', '-i', input_path,
+            '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo',  # silent audio fallback
             '-vf', vf,
             '-c:v', 'libx264', '-preset', 'fast', '-crf', str(XLAB_CRF),
             '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2',
+            '-shortest',
             '-movflags', '+faststart',
             '-pix_fmt', 'yuv420p',
             '-y', output_path, '-loglevel', 'quiet'
@@ -1786,7 +1788,7 @@ def process_universal_studio(job_id, params):
             add_log(job_id, f'   • {item["title"][:55]}')
 
         produced = []
-        avatar_path = '/tmp/xlab_avatar.jpg'
+        avatar_path = AVATAR_PATH
         if not os.path.exists(avatar_path):
             avatar_path = None
 
@@ -1795,9 +1797,9 @@ def process_universal_studio(job_id, params):
             update_job(job_id, {'progress': 10 + int((idx/len(items))*80)})
 
             # Build conspiracy Short with mysterious character format
-            character_path = params.get('character_path', '/tmp/xlab_character.jpg')
+            character_path = params.get('character_path', CHARACTER_PATH)
             if not os.path.exists(character_path):
-                character_path = '/tmp/xlab_avatar.jpg'
+                character_path = AVATAR_PATH
             final_path = build_conspiracy_short(job_id, item, work_dir, idx, grok_key,
                                                character_path if os.path.exists(character_path) else None)
 
@@ -2302,6 +2304,20 @@ Reply ONLY with valid JSON:
 
 
 # ============================================================
+# PERSISTENT STORAGE
+# ============================================================
+# Use /data if Railway volume mounted, fallback to /tmp
+STORAGE_DIR = '/data' if os.path.exists('/data') else '/tmp'
+CLIPS_DIR = os.path.join(STORAGE_DIR, 'xlab_character_clips')
+LIBRARY_DIR = os.path.join(STORAGE_DIR, 'xlab_library')
+AVATAR_PATH = os.path.join(STORAGE_DIR, 'xlab_avatar.jpg')
+CHARACTER_PATH = os.path.join(STORAGE_DIR, 'xlab_character.jpg')
+
+# Create dirs on startup
+for d in [CLIPS_DIR, LIBRARY_DIR]:
+    os.makedirs(d, exist_ok=True)
+
+# ============================================================
 # AFFILIATE DATABASE
 # ============================================================
 AFFILIATE_DB = {
@@ -2474,22 +2490,56 @@ def fetch_wikipedia_images(topic, work_dir, idx):
 
 
 def smart_fetch_visuals(item, work_dir, idx):
-    """Smart visual fetching - real content only, completely free."""
+    """Smart visual fetching — YouTube first for relevance, Archive as fallback."""
     import re
     title = item.get('title', '')
     search_q = item.get('search_query', title)
+    style = item.get('category', 'conspiracy')
     text = item.get('script', '') + item.get('x_source', '')
 
-    # 1. Internet Archive - real historical footage (free, public domain)
+    # 1. YouTube FIRST — most relevant results
+    add_log_safe('   📹 Searching YouTube for relevant footage...')
+    rapidapi_key = os.environ.get('RAPIDAPI_KEY', '')
+    if rapidapi_key:
+        better_queries = generate_better_search_query(search_q, style)
+        better_queries.insert(0, search_q + ' shorts')
+        for yt_q in better_queries[:4]:
+            items_yt = search_youtube_rapidapi(yt_q, rapidapi_key, max_results=3)
+            for it in items_yt:
+                vid_id = it.get('id', '')
+                if not vid_id:
+                    continue
+                vid_url = f'https://youtube.com/watch?v={vid_id}'
+                vid_title = it.get('title', '')[:50]
+                add_log_safe(f'   🎬 Trying: {vid_title}')
+                dl_path = download_via_rapidapi(vid_url, work_dir, f'yt_{idx}')
+                if dl_path:
+                    try:
+                        dur = get_duration(dl_path)
+                        start = max(0, dur * 0.1)
+                        cut_path = f'{work_dir}/yt_cut_{idx}.mp4'
+                        cut_vertical(dl_path, start, 25, cut_path, is_vertical(dl_path))
+                        if os.path.exists(cut_path) and os.path.getsize(cut_path) > 100000:
+                            add_log_safe(f'   ✅ YouTube: {vid_title}')
+                            return cut_path, 'youtube'
+                    except Exception as e:
+                        logger.error(f'YouTube cut: {e}')
+
+    # 2. Internet Archive — historical footage fallback
     add_log_safe('   📚 Searching Internet Archive...')
-    result, source = fetch_internet_archive_footage(search_q, work_dir, idx)
+    archive_queries = [search_q + ' documentary', ' '.join(search_q.split()[:3]), search_q]
+    result, source = None, None
+    for aq in archive_queries:
+        result, source = fetch_internet_archive_footage(aq, work_dir, idx)
+        if result:
+            break
+
     if result:
         try:
             dur = get_duration(result)
             start = max(0, dur * 0.1)
             cut_path = f'{work_dir}/cut_archive_{idx}.mp4'
-            cut_vertical(result, start, 30, cut_path, is_vertical(result))
-            # Apply smart crop
+            cut_vertical(result, start, 25, cut_path, is_vertical(result))
             smart_path = f'{work_dir}/smart_archive_{idx}.mp4'
             src = cut_path if os.path.exists(cut_path) else result
             if smart_crop_vertical(src, smart_path):
@@ -2556,7 +2606,7 @@ def build_ai_news_short(job_id, item, work_dir, idx, grok_key, avatar_path=None)
     
     # ── Part 1: Free avatar intro (MuseTalk lip sync) ─────────
     add_log(job_id, f'   🎭 Generating free avatar intro...')
-    avatar_path = '/tmp/xlab_avatar.jpg'
+    avatar_path = AVATAR_PATH
     intro_done = False
     
     if os.path.exists(avatar_path):
@@ -2789,7 +2839,7 @@ def get_character_clip(clip_type='hook'):
     Types: hook, cta, walk, point, general
     Returns path to clip or None if not available.
     """
-    clips_dir = '/tmp/xlab_character_clips'
+    clips_dir = CLIPS_DIR
     if not os.path.exists(clips_dir):
         return None
     
@@ -2937,6 +2987,23 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
     # ── Part 3: Documentary footage with narration (20s) ──────
     add_log(job_id, f'   🎬 Finding documentary footage...')
     demo_path, source = smart_fetch_visuals(item, work_dir, idx)
+
+
+    # Trim footage to max 25 seconds immediately after fetching
+    if demo_path and os.path.exists(demo_path):
+        demo_dur = get_duration(demo_path)
+        if demo_dur > 25:
+            trimmed = f'{work_dir}/trimmed_{idx}.mp4'
+            r = subprocess.run([
+                'ffmpeg', '-i', demo_path, '-t', '25',
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                '-c:a', 'aac', '-b:a', '128k',
+                '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+                '-y', trimmed, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=60)
+            if os.path.exists(trimmed) and os.path.getsize(trimmed) > 100000:
+                demo_path = trimmed
+                add_log(job_id, f'   ✂️ Footage trimmed to 25s')
 
     if demo_path:
         try:
@@ -3234,9 +3301,9 @@ def process_conspiracy_studio(job_id, params):
             update_job(job_id, {'progress': 10 + int((idx/len(items))*75)})
 
             # Use build_conspiracy_short — includes character intro + footage + CTA
-            character_path = '/tmp/xlab_character.jpg'
+            character_path = CHARACTER_PATH
             if not os.path.exists(character_path):
-                character_path = '/tmp/xlab_avatar.jpg'
+                character_path = AVATAR_PATH
             if not os.path.exists(character_path):
                 character_path = None
 
@@ -3417,7 +3484,7 @@ def process_ai_news_studio(job_id, params):
 
             # Build complete Short: avatar intro + demo + avatar CTA
             add_log(job_id, f'   🎬 Building complete Short...')
-            avatar_path = '/tmp/xlab_avatar.jpg'
+            avatar_path = AVATAR_PATH
             if not os.path.exists(avatar_path):
                 avatar_path = None
             
@@ -3639,46 +3706,76 @@ def process_grok_original_video(job_id, params):
 
 
 def text_to_speech(text, output_path, style='normal'):
-    """Convert text to speech — Groq Orpheus first (best quality), gTTS fallback."""
+    """Convert text to speech — tries multiple engines in order."""
     groq_key = os.environ.get('GROQ_API_KEY', '').strip()
-    
-    # Add dramatic style tags for conspiracy content
-    if style == 'conspiracy' and groq_key:
-        styled = f'[dramatic] {text}'
-    else:
-        styled = text
+    elevenlabs_key = os.environ.get('ELEVENLABS_API_KEY', '').strip()
 
-    # Try Groq Orpheus TTS first — much better quality
+    styled = f'[dramatic] {text}' if style == 'conspiracy' and groq_key else text
+
+    # 1. Groq Orpheus — best, free
     if groq_key:
-        wav_path = output_path.replace('.mp3', '.wav')
-        if groq_tts(styled, wav_path, groq_key, voice='zeus'):
-            # Convert wav to mp3 for compatibility
-            result = subprocess.run([
-                'ffmpeg', '-i', wav_path, '-acodec', 'libmp3lame',
-                '-q:a', '2', '-y', output_path, '-loglevel', 'quiet'
-            ], capture_output=True, timeout=30)
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
-                logger.info('Groq Orpheus TTS success')
-                return True
+        try:
+            wav_path = output_path.replace('.mp3', '.wav')
+            if groq_tts(styled, wav_path, groq_key, voice='zeus'):
+                result = subprocess.run([
+                    'ffmpeg', '-i', wav_path, '-acodec', 'libmp3lame',
+                    '-q:a', '2', '-y', output_path, '-loglevel', 'quiet'
+                ], capture_output=True, timeout=30)
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                    logger.info('✅ Groq Orpheus TTS')
+                    return True
+            logger.warning('Groq TTS failed — trying next')
+        except Exception as e:
+            logger.error(f'Groq TTS error: {e}')
 
-    # Fallback to gTTS (always works, no key needed)
+    # 2. ElevenLabs — great quality, 10k chars/month free
+    if elevenlabs_key:
+        try:
+            import requests as req
+            r = req.post(
+                'https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpgDQGcFmaJgB',
+                headers={'xi-api-key': elevenlabs_key, 'Content-Type': 'application/json'},
+                json={'text': text[:500], 'model_id': 'eleven_monolingual_v1',
+                      'voice_settings': {'stability': 0.5, 'similarity_boost': 0.75}},
+                timeout=30
+            )
+            if r.status_code == 200:
+                with open(output_path, 'wb') as f:
+                    f.write(r.content)
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                    logger.info('✅ ElevenLabs TTS')
+                    return True
+            logger.warning(f'ElevenLabs failed: {r.status_code}')
+        except Exception as e:
+            logger.error(f'ElevenLabs error: {e}')
+
+    # 3. gTTS — always works, no key needed
     try:
         from gtts import gTTS
-        tts = gTTS(text=text, lang='en', slow=False)
+        tts = gTTS(text=text[:500], lang='en', slow=False)
         tts.save(output_path)
-        return os.path.exists(output_path)
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+            logger.info('✅ gTTS fallback')
+            return True
     except Exception as e:
-        logger.error(f'TTS error: {e}')
-        return False
+        logger.error(f'gTTS error: {e}')
+
+    logger.error('❌ All TTS methods failed')
+    return False
 
 
-def overlay_narration(video_path, narration_path, output_path, narration_volume=0.8):
-    """Mix narration audio over video, reducing original audio."""
+def overlay_narration(video_path, narration_path, output_path, narration_volume=0.9, keep_original=0.2):
+    """Mix narration over video audio.
+    - narration_volume: how loud the voiceover is (0.9 = dominant)
+    - keep_original: how much of original video audio to keep (0.2 = subtle atmosphere)
+    """
     try:
         cmd = [
             'ffmpeg', '-i', video_path, '-i', narration_path,
             '-filter_complex',
-            f'[0:a]volume=0.2[orig];[1:a]volume={narration_volume}[narr];[orig][narr]amix=inputs=2:duration=first[aout]',
+            f'[0:a]apad,volume={keep_original}[orig];'
+            f'[1:a]apad,volume={narration_volume}[narr];'
+            f'[orig][narr]amix=inputs=2:duration=longest:normalize=0[aout]',
             '-map', '0:v', '-map', '[aout]',
             '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
             '-shortest', '-y', output_path, '-loglevel', 'quiet'
@@ -3735,11 +3832,15 @@ def concatenate_clips(clip_paths, output_path):
             for cp in norm_paths:
                 f.write(f"file '{cp}'\n")
 
-        # Use copy since all clips are now same format
+        # Re-encode to ensure audio is preserved across all clips
         cmd = [
             'ffmpeg', '-f', 'concat', '-safe', '0',
             '-i', concat_file,
-            '-c', 'copy', '-y', output_path, '-loglevel', 'quiet'
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-c:a', 'aac', '-b:a', '128k',
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart',
+            '-y', output_path, '-loglevel', 'quiet'
         ]
         subprocess.run(cmd, check=True, timeout=300)
         if os.path.exists(concat_file):
@@ -4821,7 +4922,7 @@ def get_formats():
 CHANNELS = {}  # channel_id -> channel config
 GENERATED_VIDEOS = {}  # video_id -> metadata + path
 
-VIDEOS_DIR = '/tmp/xlab_library'
+VIDEOS_DIR = LIBRARY_DIR
 os.makedirs(VIDEOS_DIR, exist_ok=True)
 
 
@@ -5433,7 +5534,7 @@ def research_and_generate():
 @app.route('/api/character-clips', methods=['GET'])
 def get_character_clips():
     """List all saved character clips."""
-    clips_dir = '/tmp/xlab_character_clips'
+    clips_dir = CLIPS_DIR
     os.makedirs(clips_dir, exist_ok=True)
     clips = []
     for f in os.listdir(clips_dir):
@@ -5461,7 +5562,7 @@ def upload_character_clip():
     try:
         if ',' in clip_data:
             clip_data = clip_data.split(',')[1]
-        clips_dir = '/tmp/xlab_character_clips'
+        clips_dir = CLIPS_DIR
         os.makedirs(clips_dir, exist_ok=True)
         clip_path = os.path.join(clips_dir, f'{clip_type}_{clip_name}.mp4')
         with open(clip_path, 'wb') as f:
@@ -5501,7 +5602,7 @@ def save_character():
         if ',' in image_data:
             image_data = image_data.split(',')[1]
         img_bytes = base64.b64decode(image_data)
-        char_path = '/tmp/xlab_character.jpg'
+        char_path = CHARACTER_PATH
         with open(char_path, 'wb') as f:
             f.write(img_bytes)
         return jsonify({'success': True, 'path': char_path,
@@ -5524,7 +5625,7 @@ def generate_avatar():
     url = aurora_generate_image(prompt, api_key)
     if url:
         # Save locally
-        avatar_path = '/tmp/xlab_avatar.jpg'
+        avatar_path = AVATAR_PATH
         try:
             r = req.get(url, timeout=15)
             with open(avatar_path, 'wb') as f:

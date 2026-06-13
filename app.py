@@ -2881,15 +2881,14 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
     if demo_path:
         try:
             # Add narration
+            add_log(job_id, f'   🎙️ Adding narration over footage...')
             narr_path = f'{work_dir}/narr_{idx}.mp3'
             narrated = f'{work_dir}/narrated_{idx}.mp4'
-            if text_to_speech(script, narr_path):
+            if text_to_speech(script, narr_path, style='conspiracy'):
                 if overlay_narration(demo_path, narr_path, narrated):
-                    demo_path = narrated
-
-            # Add shocking text overlays
-            overlay_out = f'{work_dir}/overlay_{idx}.mp4'
-            facts_to_show = (overlays or key_facts)[:3]
+                    if os.path.exists(narrated):
+                        demo_path = narrated
+                        add_log(job_id, f'   ✅ Narration added')
             if add_text_overlays(demo_path, overlay_out, title, hook, facts_to_show, ''):
                 demo_path = overlay_out
 
@@ -3159,8 +3158,6 @@ def process_conspiracy_studio(job_id, params):
                 add_log(job_id, f'   ❌ Failed - skipping')
                 continue
 
-            import shutil as _sh
-            _sh.copy2(clip_path, final_path)
             save_to_library(final_path, item['title'], 'conspiracy', 'conspiracy', job_id)
 
             # Upload

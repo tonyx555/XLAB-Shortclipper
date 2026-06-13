@@ -3296,23 +3296,47 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
     if not clips:
         return None
 
-    # Assemble with crossfades
+    # Assemble all parts
     add_log(job_id, f'   🎬 Assembling {len(clips)} parts...')
-    if len(clips) == 1:
-        final_path = f'{work_dir}/final_{idx}.mp4'
+    
+    if not clips:
+        add_log(job_id, f'   ❌ No clips to assemble')
+        return None
+
+    final_path = f'{work_dir}/final_{idx}.mp4'
+
+    try:
+        if len(clips) == 1:
+            import shutil
+            shutil.copy2(clips[0], final_path)
+        else:
+            # Simple concat — most reliable, always works
+            concat_file = f'{work_dir}/concat_{idx}.txt'
+            with open(concat_file, 'w') as f:
+                for cp in clips:
+                    if os.path.exists(cp) and os.path.getsize(cp) > 1000:
+                        f.write(f"file '{cp}'\n")
+            
+            result = subprocess.run([
+                'ffmpeg', '-f', 'concat', '-safe', '0', '-i', concat_file,
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                '-c:a', 'aac', '-b:a', '128k',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+                '-y', final_path, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=300)
+            
+            if not os.path.exists(final_path) or os.path.getsize(final_path) < 10000:
+                add_log(job_id, f'   ⚠️ Concat failed: {result.stderr[:100]}')
+                # Last resort — just use first clip
+                import shutil
+                shutil.copy2(clips[0], final_path)
+    except Exception as e:
+        add_log(job_id, f'   ⚠️ Assembly error: {str(e)[:60]}')
         import shutil
-        shutil.copy2(clips[0], final_path)
-    else:
-        current = clips[0]
-        for ci, nxt in enumerate(clips[1:]):
-            faded = f'{work_dir}/faded_{idx}_{ci}.mp4'
-            if not add_crossfade_transition(current, nxt, faded, 0.3):
-                merged = f'{work_dir}/merged_{idx}_{ci}.mp4'
-                concatenate_clips([current, nxt], merged)
-                current = merged
-            else:
-                current = faded
-        final_path = current
+        if clips:
+            shutil.copy2(clips[0], final_path)
+
 
     if os.path.exists(final_path):
         # Add dramatic music

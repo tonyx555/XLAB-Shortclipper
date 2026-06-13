@@ -2162,15 +2162,26 @@ async function showDone() {
   document.getElementById('doneTitle').textContent = `✓ ${job.total_clips} Shorts ready`;
   document.getElementById('doneSubtitle').textContent = `${job.zip_size_mb}MB · ${job.total_clips} clips`;
 
-  const dl = document.getElementById('downloadLink');
   const downloadUrl = `/api/jobs/${currentJobId}/download`;
-  dl.href = downloadUrl;
-  dl.textContent = `⬇ Download ZIP — ${job.zip_size_mb}MB`;
+  const mp4Url = `/api/jobs/${currentJobId}/download-mp4`;
+  
+  const dlBtn = document.getElementById('dlBtn');
+  const dlZipBtn = document.getElementById('dlZipBtn');
+  
+  if (dlBtn) {
+    dlBtn.href = mp4Url;
+    dlBtn.innerHTML = `⬇️ Download MP4 — ${job.zip_size_mb}MB`;
+  }
+  if (dlZipBtn) {
+    dlZipBtn.href = downloadUrl;
+  }
+  
+  // Legacy
+  const dl = document.getElementById('downloadLink');
+  if (dl) { dl.href = downloadUrl; }
 
-  // Auto-trigger download — Safari compatible
-  setTimeout(() => {
-    window.open(downloadUrl, '_blank');
-  }, 500);
+  // Store job for download button
+  window._lastJob = job;
 
   // Save to history
   const historyItem = {

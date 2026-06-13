@@ -677,6 +677,28 @@ def normalize_clip(input_path, output_path, color_grade=True):
         return False
 
 
+def search_youtube_rapidapi(query, rapidapi_key, max_results=5):
+    """Search YouTube via RapidAPI and return video items."""
+    import requests as req
+    try:
+        r = req.get(
+            'https://youtube-media-downloader.p.rapidapi.com/v2/search/videos',
+            params={'query': query, 'hl': 'en', 'gl': 'US'},
+            headers={
+                'x-rapidapi-key': rapidapi_key,
+                'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com'
+            },
+            timeout=15
+        )
+        data = r.json()
+        items = data.get('items', [])
+        logger.info(f'YouTube search "{query[:40]}": {len(items)} results')
+        return items[:max_results]
+    except Exception as e:
+        logger.error(f'YouTube search error: {e}')
+        return []
+
+
 def compile_highlights_from_multiple(search_queries, work_dir, output_path, target_duration=30):
     """Download multiple videos and compile the most engaging moments.
     This is the Opus Clip approach - find viral moments from existing content."""
@@ -3020,32 +3042,45 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
     add_log(job_id, f'   🎭 Creating character intro...')
     try:
         char_intro = f'{work_dir}/char_intro_{idx}.mp4'
-        if character_path and os.path.exists(character_path):
-            # Animate character with zoom in effect
+        import shutil as _shi
+
+        # Try library clip first
+        lib_hook = get_character_clip('hook')
+        if lib_hook:
+            hook_voice = f"[dramatic] {hook}"
+            replace_clip_audio(lib_hook, hook_voice, char_intro, 'conspiracy')
+            if not os.path.exists(char_intro):
+                _shi.copy2(lib_hook, char_intro)
+        elif character_path and os.path.exists(character_path):
+            # Simple still image — no zoom (zoompan causes issues)
             subprocess.run([
                 'ffmpeg', '-loop', '1', '-i', character_path,
-                '-vf', ('scale=1080:1920:force_original_aspect_ratio=increase,'
-                       'crop=1080:1920,'
-                       'zoompan=z=\'min(zoom+0.002,1.2)\''
-                       ':x=\'iw/2-(iw/zoom/2)\''
-                       ':y=\'ih/2-(ih/zoom/2)\''
-                       ':d=90:s=1080x1920:fps=30'),
-                '-pix_fmt', 'yuv420p', '-y', char_intro, '-loglevel', 'quiet'
+                '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30',
+                '-t', '4',
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                '-pix_fmt', 'yuv420p',
+                '-y', char_intro, '-loglevel', 'quiet'
             ], capture_output=True, timeout=30)
         else:
-            # Black intro card
+            # Black card with hook text
+            safe_hook_text = hook[:50].replace("'","").replace('"','').replace(':','')
             subprocess.run([
                 'ffmpeg', '-f', 'lavfi',
-                '-i', 'color=c=black:size=1080x1920:duration=3:rate=30',
+                '-i', 'color=c=black:size=1080x1920:duration=4:rate=30',
+                '-vf', f"drawtext=text='{safe_hook_text}':fontsize=44:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:fontweight=bold",
                 '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
-                '-pix_fmt', 'yuv420p', '-y', char_intro, '-loglevel', 'quiet'
+                '-pix_fmt', 'yuv420p',
+                '-y', char_intro, '-loglevel', 'quiet'
             ], capture_output=True, timeout=20)
 
-        if os.path.exists(char_intro):
+        if os.path.exists(char_intro) and os.path.getsize(char_intro) > 10000:
             clips.append(char_intro)
             add_log(job_id, f'   ✅ Character intro ready')
+        else:
+            add_log(job_id, f'   ⚠️ Intro skipped — no clip available')
+
     except Exception as e:
-        add_log(job_id, f'   ⚠️ Intro error: {str(e)[:40]}')
+        add_log(job_id, f'   ⚠️ Intro error: {str(e)[:50]}')
 
     # ── Part 2: Hook text reveal (3s) ─────────────────────────
     try:

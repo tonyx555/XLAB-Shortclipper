@@ -4858,25 +4858,89 @@ def test_research():
 
 @app.route('/api/research-topic', methods=['POST'])
 def research_and_generate():
-    """Research any topic and generate a viral script."""
+    """Research any topic and generate a viral script.
+    Flow: Claude search → Gemini script → fallback
+    """
     data = request.json or {}
     topic = data.get('topic', '')
     style = data.get('style', 'conspiracy')
     if not topic:
         return jsonify({'error': 'Topic required'})
-    
-    grok_key = os.environ.get('GROK_API_KEY', '').strip()
-    
-    # Research with Wikipedia first (free, always works)
-    research = research_topic_web(topic)
-    
-    # Generate script
-    result = generate_script_from_research(topic, research, grok_key, style)
-    
-    if result:
-        result['wikipedia_source'] = research.get('url', '') if research else ''
-        return jsonify({'success': True, 'item': result})
-    return jsonify({'error': 'Script generation failed'})
+
+    anthropic_key = os.environ.get('ANTHROPIC_API_KEY', '').strip()
+    gemini_key = (os.environ.get('GEMINI_API_KEY', '') or 
+                  os.environ.get('CLAUDE_API_KEY', '')).strip()
+    # Only use gemini key if it starts with AIza (not anthropic key)
+    if gemini_key and not gemini_key.startswith('AIza'):
+        gemini_key = ''
+
+    debug = {
+        'topic': topic,
+        'anthropic_key': bool(anthropic_key),
+        'gemini_key': bool(gemini_key),
+    }
+
+    # ── Step 1: Research using Claude web search ──────────────
+    research_content = ''
+
+    if anthropic_key:
+        logger.info(f'Researching with Claude: {topic}')
+        claude_result = research_with_claude_search(topic, anthropic_key)
+        if claude_result:
+            research_content = claude_result
+            debug['research_source'] = 'claude_web'
+            debug['research_chars'] = len(research_content)
+            logger.info(f'Claude research: {len(research_content)} chars')
+
+    # ── Step 2: Fallback research — DuckDuckGo + Wikipedia ────
+    if not research_content:
+        logger.info(f'Claude unavailable — using free web research')
+        web_result = research_topic_web(topic)
+        if web_result and web_result.get('content'):
+            research_content = web_result['content']
+            debug['research_source'] = 'ddg_wikipedia'
+            debug['research_chars'] = len(research_content)
+
+    # Still nothing — use topic alone
+    if not research_content:
+        research_content = f'Topic: {topic}'
+        debug['research_source'] = 'topic_only'
+
+    research = {'content': research_content, 'sources': [], 'topic': topic}
+
+    # ── Step 3: Generate script using Gemini (free) ───────────
+    result = None
+
+    if gemini_key:
+        logger.info(f'Generating script with Gemini')
+        result = generate_script_from_research(topic, research, gemini_key, style)
+        if result:
+            debug['script_ai'] = 'gemini'
+
+    # Fallback to Grok if Gemini fails
+    if not result:
+        grok_key = os.environ.get('GROK_API_KEY', '').strip()
+        if grok_key:
+            result = generate_script_from_research(topic, research, grok_key, style)
+            if result:
+                debug['script_ai'] = 'grok'
+
+    # Last resort — basic script without AI
+    if not result:
+        result = {
+            'title': topic[:55].upper(),
+            'hook': f'Nobody talks about {topic}',
+            'script': f'Here is what you need to know about {topic}. This information has been hidden from you.',
+            'key_facts': [f'Fact about {topic}', 'This changes everything', 'Share this truth'],
+            'search_query': topic + ' documentary',
+            'text_overlays': [topic.upper()[:45], 'THE TRUTH', 'NOBODY TALKS ABOUT THIS'],
+            'hashtags': ['#conspiracy', '#history', '#didyouknow', '#shorts']
+        }
+        debug['script_ai'] = 'fallback'
+
+    logger.info(f'Research complete: {debug}')
+    result['debug'] = debug
+    return jsonify({'success': True, 'item': result})
 
 
 @app.route('/api/save-character', methods=['POST'])

@@ -1,5 +1,5 @@
 """
-XLAB ShortClipper — Railway Backend
+XLAB ShortClipper - Railway Backend
 Flask app with in-memory job tracking, background processing,
 direct ZIP download. No Firebase or GCS needed.
 """
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # ============================================================
-# Config — set these as Railway environment variables
+# Config - set these as Railway environment variables
 # ============================================================
 CLAUDE_API_KEY   = os.environ.get('CLAUDE_API_KEY', '')
 YT_CLIENT_ID     = os.environ.get('YT_CLIENT_ID', '')
@@ -280,7 +280,7 @@ def cut_vertical(video_path, start, length, out_path,
         cx, cy = (w - crop) // 2, (h - crop) // 2
         vf_base = f'crop={crop}:{crop}:{cx}:{cy},scale=1080:1080,pad=1080:1920:0:(oh-ih)/2:black'
 
-    # Always add XLAB brand — subtle top right
+    # Always add XLAB brand - subtle top right
     xlab_brand = "drawtext=text='XLAB':fontsize=24:fontcolor=white:alpha=0.4:x=w-tw-16:y=16:fontweight=bold"
 
     if watermark_text.strip():
@@ -372,7 +372,7 @@ def add_trending_music(clip_path, out_path, music_style='energetic', volume=0.3)
 
 
 # ============================================================
-# LEVEL 3 — AI Content Creation
+# LEVEL 3 - AI Content Creation
 # ============================================================
 
 def generate_ai_script(topic, num_points, duration_per_point, api_key):
@@ -449,7 +449,7 @@ Respond ONLY with valid JSON, no markdown:
 
 def fetch_pexels_footage(query, work_dir, idx, api_key=None):
     """Fetch free HD video footage from Pexels.
-    API key free at pexels.com/api — 200 requests/hour free.
+    API key free at pexels.com/api - 200 requests/hour free.
     """
     import requests as req
     key = api_key or os.environ.get('PEXELS_API_KEY', '')
@@ -673,7 +673,7 @@ def normalize_clip(input_path, output_path, color_grade=True):
 
 def compile_highlights_from_multiple(search_queries, work_dir, output_path, target_duration=30):
     """Download multiple videos and compile the most engaging moments.
-    This is the Opus Clip approach — find viral moments from existing content."""
+    This is the Opus Clip approach - find viral moments from existing content."""
     import requests as req
 
     rapidapi_key = os.environ.get('RAPIDAPI_KEY', '')
@@ -747,7 +747,7 @@ def compile_highlights_from_multiple(search_queries, work_dir, output_path, targ
                             good_peaks = [p for p in peaks 
                                          if min_start < p < max_start]
                             if good_peaks:
-                                # Pick peak with highest energy — most action
+                                # Pick peak with highest energy - most action
                                 best_start = good_peaks[0]
                             elif peaks:
                                 best_start = max(peaks[0], min_start)
@@ -781,10 +781,10 @@ def compile_highlights_from_multiple(search_queries, work_dir, output_path, targ
 
 
 def fetch_best_visuals(item, work_dir, idx):
-    """Get the best visuals for an AI news item — tries multiple sources."""
+    """Get the best visuals for an AI news item - tries multiple sources."""
     import requests as req
 
-    # Source 1: Compile highlights — search specifically for screen recordings
+    # Source 1: Compile highlights - search specifically for screen recordings
     title = item.get('title', '')
     base_query = item.get('search_query', title)
     search_queries = [
@@ -886,7 +886,7 @@ def add_text_overlays(video_path, output_path, title, hook, key_points=None, cta
         # Build drawtext filters
         filters = []
         
-        # Hook text — bold, top of screen, first 5 seconds
+        # Hook text - bold, top of screen, first 5 seconds
         safe_hook = re.sub(r"[':]", '', hook[:60])[:60]
         filters.append(
             f"drawtext=text='{safe_hook}':"
@@ -896,7 +896,7 @@ def add_text_overlays(video_path, output_path, title, hook, key_points=None, cta
             f"enable='between(t,0,4)'"
         )
         
-        # Title — middle of screen, seconds 1-3
+        # Title - middle of screen, seconds 1-3
         safe_title = re.sub(r"[':]", '', title[:50])[:60]
         filters.append(
             f"drawtext=text='{safe_title}':"
@@ -906,7 +906,7 @@ def add_text_overlays(video_path, output_path, title, hook, key_points=None, cta
             f"enable='between(t,1,3)'"
         )
         
-        # Key points — appear mid video
+        # Key points - appear mid video
         if key_points:
             for i, point in enumerate(key_points[:3]):
                 safe_point = re.sub(r"[':]", '', point[:50])[:60]
@@ -920,7 +920,7 @@ def add_text_overlays(video_path, output_path, title, hook, key_points=None, cta
                     f"enable='between(t,{t_start},{t_end})'"
                 )
         
-        # CTA — last 4 seconds
+        # CTA - last 4 seconds
         safe_cta = re.sub(r"[':]", '', cta[:50])[:60]
         filters.append(
             f"drawtext=text='{safe_cta}':"
@@ -960,7 +960,7 @@ def add_text_overlays(video_path, output_path, title, hook, key_points=None, cta
 
 
 def post_to_x(video_path, text, api_key, api_secret, access_token, access_token_secret):
-    """Post video to X (Twitter) using tweepy — free tier supports 1500 posts/month."""
+    """Post video to X (Twitter) using tweepy - free tier supports 1500 posts/month."""
     try:
         import tweepy
 
@@ -1012,7 +1012,7 @@ def post_to_x(video_path, text, api_key, api_secret, access_token, access_token_
 
 
 def call_gemini_free(prompt, api_key=None):
-    """Call Gemini API — completely free tier available.
+    """Call Gemini API - completely free tier available.
     Get key at aistudio.google.com
     """
     import requests as req
@@ -1060,8 +1060,8 @@ def call_grok(prompt, api_key):
             err = data.get('error', {})
             err_code = err.get('code', '') if isinstance(err, dict) else ''
             if err_code == 'permission-denied':
-                # Credits exhausted — fall back to Gemini
-                logger.warning('Grok credits exhausted — falling back to Gemini')
+                # Credits exhausted - fall back to Gemini
+                logger.warning('Grok credits exhausted - falling back to Gemini')
                 return call_gemini_free(prompt)
             logger.error(f'Grok {model}: {str(data)[:100]}')
         except Exception as e:
@@ -1095,7 +1095,7 @@ def grok_tts(text, output_path, api_key, voice='ara'):
 
 def musetalk_generate_avatar(avatar_image_path, audio_path, output_path):
     """Generate talking avatar video using MuseTalk on Hugging Face Spaces.
-    Completely free — no API key needed, just HF account optional.
+    Completely free - no API key needed, just HF account optional.
     Input: avatar image + audio file
     Output: lip-synced talking video
     """
@@ -1110,7 +1110,7 @@ def musetalk_generate_avatar(avatar_image_path, audio_path, output_path):
             "fffiloni/MuseTalk",
         ]
         
-        hf_token = os.environ.get('HF_TOKEN', '')  # Optional — works without token too
+        hf_token = os.environ.get('HF_TOKEN', '')  # Optional - works without token too
         
         for space in spaces:
             try:
@@ -1166,7 +1166,7 @@ def generate_free_avatar_clip(text, avatar_image_path, output_path, work_dir):
             return True
         
         # Fallback: just use audio over static image
-        logger.info('MuseTalk failed — using static avatar with audio')
+        logger.info('MuseTalk failed - using static avatar with audio')
         result = subprocess.run([
             'ffmpeg',
             '-loop', '1', '-i', avatar_image_path,
@@ -1349,7 +1349,7 @@ def grok_generate_video(prompt, output_path, api_key, duration=10, aspect_ratio=
             logger.error(f'No request_id in Aurora response: {data}')
             return False
         logger.info(f'Aurora generation started: {request_id}')
-        # Poll until done — usually 17-60 seconds
+        # Poll until done - usually 17-60 seconds
         for attempt in range(40):
             time.sleep(8)
             r2 = req.get(
@@ -1430,7 +1430,7 @@ def search_x_for_ai_news(categories=None):
 
     bearer = os.environ.get('X_BEARER_TOKEN', '') or os.environ.get('X_API_KEY', '')
     if not bearer:
-        logger.warning('No X Bearer Token — skipping X search')
+        logger.warning('No X Bearer Token - skipping X search')
         return []
 
     queries = {
@@ -1655,7 +1655,7 @@ Reply ONLY with valid JSON:
     # Try Grok first, then Gemini free fallback
     text = call_grok(prompt, api_key)
     if not text:
-        logger.info('Grok failed — trying Gemini free')
+        logger.info('Grok failed - trying Gemini free')
         text = call_gemini_free(prompt)
     logger.info(f'Content finder response: {text[:200] if text else "None"}')
     
@@ -1685,7 +1685,7 @@ Reply ONLY with valid JSON:
 
 
 def process_universal_studio(job_id, params):
-    """Generate viral content for ANY niche — the universal content machine."""
+    """Generate viral content for ANY niche - the universal content machine."""
     work_dir = f'/tmp/universal_{job_id}'
     os.makedirs(work_dir, exist_ok=True)
 
@@ -1731,7 +1731,7 @@ def process_universal_studio(job_id, params):
                                                character_path if os.path.exists(character_path) else None)
 
             if not final_path:
-                add_log(job_id, f'   ❌ Failed — skipping')
+                add_log(job_id, f'   ❌ Failed - skipping')
                 continue
 
             # Save to library
@@ -1784,13 +1784,13 @@ def process_universal_studio(job_id, params):
 
 
 def research_with_claude_search(topic, api_key=None):
-    """Use Claude API with web search tool — searches the real web.
+    """Use Claude API with web search tool - searches the real web.
     Uses the same Anthropic API key if available.
     Returns rich web research results.
     """
     import requests as req
     key = api_key or os.environ.get('ANTHROPIC_API_KEY', '') or os.environ.get('CLAUDE_API_KEY', '')
-    # Try Gemini key format too — sometimes stored as CLAUDE_API_KEY
+    # Try Gemini key format too - sometimes stored as CLAUDE_API_KEY
     if not key or key.startswith('AIza'):
         key = None
     
@@ -1834,7 +1834,7 @@ def research_with_claude_search(topic, api_key=None):
 
 
 def search_brave(query, api_key=None):
-    """Search web using Brave Search API — 2000 free searches/month.
+    """Search web using Brave Search API - 2000 free searches/month.
     Get free key at api.search.brave.com
     """
     import requests as req
@@ -1897,7 +1897,7 @@ def search_gemini_grounded(query, api_key=None):
 
 
 def research_topic_web(topic):
-    """Research using real web search — multiple free sources."""
+    """Research using real web search - multiple free sources."""
     import requests as req
     results = {'topic': topic, 'content': '', 'sources': [], 'images': []}
 
@@ -2057,8 +2057,8 @@ def research_topic_web_old(topic):
 
 
 def research_topic_wikipedia(topic):
-    """Research a topic using Wikipedia API — completely free, always works.
-    Kept for backward compatibility — now calls research_topic_web internally.
+    """Research a topic using Wikipedia API - completely free, always works.
+    Kept for backward compatibility - now calls research_topic_web internally.
     """
     result = research_topic_web(topic)
     if result:
@@ -2195,7 +2195,7 @@ Research these specific topic areas and find the most shocking TRUE facts:
 - {selected[2]}
 
 Rules:
-- ONLY real verified historical facts — no fake news or misinformation
+- ONLY real verified historical facts - no fake news or misinformation
 - Each fact must be genuinely surprising and provable
 - Write in the style: short punchy sentences, outraged tone, "they don't want you to know"
 - Perfect for 30 second Shorts
@@ -2204,8 +2204,8 @@ Reply ONLY with valid JSON:
 {{"items": [
   {{
     "title": "HOOK IN CAPS UNDER 60 CHARS",
-    "hook": "Opening line — must shock in 2 seconds",
-    "script": "30 second script — punchy facts, dramatic, educational",
+    "hook": "Opening line - must shock in 2 seconds",
+    "script": "30 second script - punchy facts, dramatic, educational",
     "key_facts": ["Shocking fact 1", "Shocking fact 2", "Shocking fact 3"],
     "search_query": "YouTube documentary search for this topic",
     "text_overlays": ["LINE 1 IN CAPS", "KEY FACT LINE 2", "SHOCKING LINE 3"],
@@ -2326,7 +2326,7 @@ def fetch_website_screenshot(url, work_dir, idx):
 
 
 def fetch_wikipedia_images(topic, work_dir, idx):
-    """Fetch real historical images from Wikipedia — free, factual, credible."""
+    """Fetch real historical images from Wikipedia - free, factual, credible."""
     import requests as req
     try:
         # Search Wikipedia for images related to topic
@@ -2382,13 +2382,13 @@ def fetch_wikipedia_images(topic, work_dir, idx):
 
 
 def smart_fetch_visuals(item, work_dir, idx):
-    """Smart visual fetching — real content only, completely free."""
+    """Smart visual fetching - real content only, completely free."""
     import re
     title = item.get('title', '')
     search_q = item.get('search_query', title)
     text = item.get('script', '') + item.get('x_source', '')
 
-    # 1. Internet Archive — real historical footage (free, public domain)
+    # 1. Internet Archive - real historical footage (free, public domain)
     add_log_safe('   📚 Searching Internet Archive...')
     result, source = fetch_internet_archive_footage(search_q, work_dir, idx)
     if result:
@@ -2442,7 +2442,7 @@ def smart_fetch_visuals(item, work_dir, idx):
     return None, 'avatar_only'
 
 def add_log_safe(msg):
-    """Log without job_id — used in utility functions."""
+    """Log without job_id - used in utility functions."""
     logger.info(msg)
 
 
@@ -2521,7 +2521,7 @@ def build_ai_news_short(job_id, item, work_dir, idx, grok_key, avatar_path=None)
                     demo_path = overlay_out
 
             clips.append(demo_path)
-            add_log(job_id, f'   ✅ Demo ready — {source}')
+            add_log(job_id, f'   ✅ Demo ready - {source}')
         except Exception as e:
             add_log(job_id, f'   ⚠️ Demo processing error: {str(e)[:50]}')
             clips.append(demo_path)  # use raw clip even if processing fails
@@ -2566,9 +2566,9 @@ def build_ai_news_short(job_id, item, work_dir, idx, grok_key, avatar_path=None)
         except Exception as e:
             add_log(job_id, f'   ⚠️ CTA card error: {str(e)[:40]}')
     
-    # If avatar_only mode — generate longer avatar clip with full narration
+    # If avatar_only mode - generate longer avatar clip with full narration
     if source == 'avatar_only' and avatar_path and grok_key:
-        add_log(job_id, f'   🎭 No demo found — avatar talks full video...')
+        add_log(job_id, f'   🎭 No demo found - avatar talks full video...')
         full_avatar = f'{work_dir}/full_avatar_{idx}.mp4'
         if aurora_image_to_video(
             avatar_path, None, full_avatar, grok_key,
@@ -2698,7 +2698,7 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
                 demo_path = overlay_out
 
             clips.append(demo_path)
-            add_log(job_id, f'   ✅ Footage ready — {source}')
+            add_log(job_id, f'   ✅ Footage ready - {source}')
         except Exception as e:
             clips.append(demo_path)
             add_log(job_id, f'   ⚠️ Footage processing: {str(e)[:40]}')
@@ -2817,7 +2817,7 @@ def process_conspiracy_studio(job_id, params):
             clip_path, source = fetch_best_visuals(item, work_dir, idx)
 
             if not clip_path:
-                add_log(job_id, f'   ⚠️ No footage — skipping')
+                add_log(job_id, f'   ⚠️ No footage - skipping')
                 continue
 
             # Add Grok narration
@@ -2945,7 +2945,7 @@ Reply ONLY with this exact JSON, no other text:
         logger.error(f'No items in Grok response: {result}')
         return None
     except Exception as e:
-        logger.error(f'AI news parse error: {e} — raw: {text[:200]}')
+        logger.error(f'AI news parse error: {e} - raw: {text[:200]}')
         # Try to manually build a basic item from the response
         return {
             "items": [{
@@ -2978,7 +2978,7 @@ def process_ai_news_studio(job_id, params):
 
         logger.info(f'Grok key check: env={bool(os.environ.get("GROK_API_KEY"))}, param={bool(params.get("grok_key"))}')
         if not grok_key:
-            raise Exception('Grok API key required — add GROK_API_KEY to Railway variables')
+            raise Exception('Grok API key required - add GROK_API_KEY to Railway variables')
 
         add_log(job_id, '🔍 Scanning X for latest AI news, hacks and hustles...')
         update_job(job_id, {'progress': 5})
@@ -2986,7 +2986,7 @@ def process_ai_news_studio(job_id, params):
         news_data = grok_find_ai_news(grok_key, categories)
         if not news_data or not news_data.get('items'):
             add_log(job_id, f'   Grok response was empty or invalid')
-            raise Exception('No AI news found — Grok returned no items. Check Railway logs for details.')
+            raise Exception('No AI news found - Grok returned no items. Check Railway logs for details.')
 
         items = news_data['items'][:max_videos]
         add_log(job_id, f'✅ Found {len(items)} stories to cover')
@@ -3012,7 +3012,7 @@ def process_ai_news_studio(job_id, params):
             )
 
             if not clip_path:
-                add_log(job_id, f'   ❌ No footage found — skipping')
+                add_log(job_id, f'   ❌ No footage found - skipping')
                 continue
 
             # Add narration
@@ -3137,7 +3137,7 @@ def process_grok_original_video(job_id, params):
 
         logger.info(f'Grok key check: env={bool(os.environ.get("GROK_API_KEY"))}, param={bool(params.get("grok_key"))}')
         if not grok_key:
-            raise Exception('Grok API key required — add GROK_API_KEY to Railway variables')
+            raise Exception('Grok API key required - add GROK_API_KEY to Railway variables')
 
         add_log(job_id, f'⚡ Writing script for: "{topic}"...')
         script = generate_ai_script(topic, num_clips, clip_duration, grok_key)
@@ -3160,7 +3160,7 @@ def process_grok_original_video(job_id, params):
 
             add_log(job_id, f'   🎥 Generating {clip_duration}s AI video...')
             if not grok_generate_video(video_prompt, clip_path, grok_key, clip_duration, '9:16'):
-                add_log(job_id, f'   ⚠️ Generation failed — skipping')
+                add_log(job_id, f'   ⚠️ Generation failed - skipping')
                 continue
 
             # Add narration
@@ -3177,7 +3177,7 @@ def process_grok_original_video(job_id, params):
             add_log(job_id, f'   ✅ Scene {idx+1} ready ({size:.1f}MB)')
 
         if not assembled_clips:
-            raise Exception('No clips generated — check Grok API key and credits')
+            raise Exception('No clips generated - check Grok API key and credits')
 
         add_log(job_id, f'\n🎬 Assembling {len(assembled_clips)} scenes...')
         update_job(job_id, {'progress': 80})
@@ -3211,7 +3211,7 @@ def process_grok_original_video(job_id, params):
             zf.write(final_path, os.path.basename(final_path))
         zip_size = os.path.getsize(zip_name) / (1024*1024)
 
-        add_log(job_id, f'\n🎉 AI video ready! ({size:.1f}MB) — {len(assembled_clips)*clip_duration}s total')
+        add_log(job_id, f'\n🎉 AI video ready! ({size:.1f}MB) - {len(assembled_clips)*clip_duration}s total')
         update_job(job_id, {
             'status': 'done', 'progress': 100,
             'completed_at': datetime.now().isoformat(),
@@ -3272,7 +3272,7 @@ def add_text_overlay(video_path, text, output_path, position='top'):
 
 
 def concatenate_clips(clip_paths, output_path):
-    """Concatenate multiple clips — normalizes all to same format first."""
+    """Concatenate multiple clips - normalizes all to same format first."""
     try:
         if not clip_paths:
             return False
@@ -3315,7 +3315,7 @@ def concatenate_clips(clip_paths, output_path):
 
 
 def process_ai_content_job(job_id, params):
-    """Level 3 — Full AI video assembly from a topic prompt."""
+    """Level 3 - Full AI video assembly from a topic prompt."""
     work_dir = f'/tmp/aicontent_{job_id}'
     clips_dir = f'{work_dir}/clips'
     out_dir = f'{work_dir}/output'
@@ -3340,7 +3340,7 @@ def process_ai_content_job(job_id, params):
         add_log(job_id, f'🤖 Generating script for: "{topic}"...')
         update_job(job_id, {{'progress': 5}})
 
-        # Step 1 — Generate script
+        # Step 1 - Generate script
         script = generate_ai_script(topic, num_points, clip_duration, claude_key)
         if not script:
             raise Exception('Failed to generate script')
@@ -3350,7 +3350,7 @@ def process_ai_content_job(job_id, params):
         add_log(job_id, f'   {len(script["points"])} points to find footage for')
         update_job(job_id, {{'progress': 10, 'script': script}})
 
-        # Step 2 — Find and download clips for each point
+        # Step 2 - Find and download clips for each point
         assembled_clips = []
         cookies_file = None
         yt_cookies = os.environ.get('YT_COOKIES', '')
@@ -3389,7 +3389,7 @@ def process_ai_content_job(job_id, params):
                     clip_path = found[0]
 
             if not clip_path or not os.path.exists(clip_path):
-                add_log(job_id, f'   ⚠️ No footage found — skipping point')
+                add_log(job_id, f'   ⚠️ No footage found - skipping point')
                 continue
 
             # Cut to required duration
@@ -3422,24 +3422,24 @@ def process_ai_content_job(job_id, params):
             add_log(job_id, f'   ✅ Point {idx+1} ready')
 
         if not assembled_clips:
-            raise Exception('No clips assembled — all points failed')
+            raise Exception('No clips assembled - all points failed')
 
         add_log(job_id, f'\n🎬 Assembling {len(assembled_clips)} clips...')
         update_job(job_id, {{'progress': 70}})
 
-        # Step 3 — Concatenate all clips
+        # Step 3 - Concatenate all clips
         final_path = f'{out_dir}/{job_id}_ai_video.mp4'
         if not concatenate_clips(assembled_clips, final_path):
             raise Exception('Failed to concatenate clips')
 
-        # Step 4 — Add music if enabled
+        # Step 4 - Add music if enabled
         if music_enabled:
             add_log(job_id, f'🎵 Adding {music_style} music...')
             music_out = final_path.replace('.mp4', '_music.mp4')
             if add_trending_music(final_path, music_out, music_style, 0.25):
                 os.replace(music_out, final_path)
 
-        # Step 5 — Auto upload to YouTube
+        # Step 5 - Auto upload to YouTube
         yt_id = ''
         if auto_upload and yt_token:
             add_log(job_id, f'📤 Uploading to YouTube...')
@@ -3599,7 +3599,7 @@ def download_via_rapidapi(video_url, output_dir, video_id):
         data = r.json()
         logger.info(f'RapidAPI response keys: {list(data.keys())} errorId: {data.get("errorId")}')
         if data.get('errorId') != 'Success':
-            logger.error(f'RapidAPI error: {data.get("errorId")} — {str(data)[:200]}')
+            logger.error(f'RapidAPI error: {data.get("errorId")} - {str(data)[:200]}')
             return None
 
         # Get best video stream
@@ -3633,7 +3633,7 @@ def download_via_rapidapi(video_url, output_dir, video_id):
         output_path = os.path.join(output_dir, f'{video_id}.mp4')
         temp_path = output_path + '.tmp'
 
-        # Use wget for faster download — much faster than requests streaming
+        # Use wget for faster download - much faster than requests streaming
         wget_result = subprocess.run([
             'wget', '-q', '-O', temp_path,
             '--timeout=60', '--tries=3',
@@ -3690,7 +3690,7 @@ def download_via_rapidapi(video_url, output_dir, video_id):
                     remuxed = True
         else:
             logger.error(f'RapidAPI returned invalid file: {probe_output[:100]}')
-            # Try using file directly — maybe ffmpeg is wrong
+            # Try using file directly - maybe ffmpeg is wrong
             import shutil
             shutil.copy2(temp_path, output_path)
             if os.path.exists(output_path) and os.path.getsize(output_path) > 100000:
@@ -3931,7 +3931,7 @@ def process_job(job_id, params):
             add_log(job_id, f'Available formats: {debug_result.stdout[:1000]}')
             add_log(job_id, f'Format errors: {debug_result.stderr[:500]}')
 
-        # Skip browser upload wait — proxy handles all downloads directly
+        # Skip browser upload wait - proxy handles all downloads directly
         update_job(job_id, {'uploads_ready': True})
 
         # Check for browser-uploaded videos
@@ -3949,7 +3949,7 @@ def process_job(job_id, params):
         if proxy:
             add_log(job_id, f'   🔒 Using residential proxy for downloads')
         else:
-            add_log(job_id, f'   ⚠️ No proxy set — add PROXY_URL env variable')
+            add_log(job_id, f'   ⚠️ No proxy set - add PROXY_URL env variable')
 
         for v in selected_videos:
             add_log(job_id, f'   ⬇️  {v["title"][:50]}...')
@@ -3978,7 +3978,7 @@ def process_job(job_id, params):
                 add_log(job_id, f'   🔄 Downloading via proxy...')
                 out_tmpl = f'{raw_dir}/{v["id"]}.%(ext)s'
 
-                # Quality cascade — tries best quality, audio optional
+                # Quality cascade - tries best quality, audio optional
                 fmt = (
                     'bestvideo[height<=1080]+bestaudio/bestvideo[height<=1080]'
                     '/bestvideo[height<=720]+bestaudio/bestvideo[height<=720]'
@@ -4056,12 +4056,12 @@ def process_job(job_id, params):
                     size = os.path.getsize(downloaded_path) / (1024*1024)
                     add_log(job_id, f'   ✅ Downloaded direct ({size:.1f}MB)')
                 else:
-                    add_log(job_id, f'   ❌ All 5 download methods failed — skipping')
+                    add_log(job_id, f'   ❌ All 5 download methods failed - skipping')
 
         downloaded = glob.glob(f'{raw_dir}/*.mp4')
         add_log(job_id, f'✅ Downloaded {len(downloaded)} file(s)')
         if not downloaded:
-            raise Exception('No videos downloaded — check PROXY_URL environment variable')
+            raise Exception('No videos downloaded - check PROXY_URL environment variable')
 
         all_clips     = []
         clip_metadata = []
@@ -4114,7 +4114,7 @@ def process_job(job_id, params):
                         meta = generate_ai_metadata(source_title, ci+1, topic, claude_key)
 
                     size = os.path.getsize(clip_path) / (1024 * 1024)
-                    add_log(job_id, f'      ✅ {clip_name} ({size:.1f}MB) — {meta["score"]}/10')
+                    add_log(job_id, f'      ✅ {clip_name} ({size:.1f}MB) - {meta["score"]}/10')
 
                     all_clips.append(clip_path)
                     clip_metadata.append({
@@ -4892,16 +4892,16 @@ def research_and_generate():
             debug['research_chars'] = len(research_content)
             logger.info(f'Claude research: {len(research_content)} chars')
 
-    # ── Step 2: Fallback research — DuckDuckGo + Wikipedia ────
+    # ── Step 2: Fallback research - DuckDuckGo + Wikipedia ────
     if not research_content:
-        logger.info(f'Claude unavailable — using free web research')
+        logger.info(f'Claude unavailable - using free web research')
         web_result = research_topic_web(topic)
         if web_result and web_result.get('content'):
             research_content = web_result['content']
             debug['research_source'] = 'ddg_wikipedia'
             debug['research_chars'] = len(research_content)
 
-    # Still nothing — use topic alone
+    # Still nothing - use topic alone
     if not research_content:
         research_content = f'Topic: {topic}'
         debug['research_source'] = 'topic_only'
@@ -4925,7 +4925,7 @@ def research_and_generate():
             if result:
                 debug['script_ai'] = 'grok'
 
-    # Last resort — basic script without AI
+    # Last resort - basic script without AI
     if not result:
         result = {
             'title': topic[:55].upper(),

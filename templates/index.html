@@ -1292,6 +1292,19 @@ select { cursor: pointer; }
     </div>
 
     <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Custom Topic (optional)</div>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="conspCustomTopic" placeholder="e.g. Colonial America farming laws" style="flex:1">
+        <button onclick="researchTopic()" id="conspResearchBtn" 
+          style="background:#111;border:1px solid #222;color:#888;font-size:11px;padding:0 12px;border-radius:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">
+          🔍 Research
+        </button>
+      </div>
+      <div id="conspResearchResult" style="display:none;margin-top:8px;background:#0a0a0a;border:1px solid #1e1e1e;border-radius:8px;padding:10px;font-size:11px;color:#666"></div>
+      <div style="font-size:10px;color:#444;margin-top:6px">Leave empty to auto-find viral topics</div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px">
       <div class="card-title">Videos per run</div>
       <select id="conspMaxVideos">
         <option value="1">1 video</option>
@@ -1635,6 +1648,19 @@ select { cursor: pointer; }
     <div class="card" style="margin-bottom:12px">
       <div class="card-title">Or upload your own</div>
       <input type="file" id="avatarUpload" accept="image/*" onchange="uploadAvatar(this)" style="font-size:12px;color:#666">
+    </div>
+
+    <div class="card" style="margin-bottom:12px;border-color:rgba(255,200,0,0.2)">
+      <div class="card-title">👀 Mystery Character</div>
+      <div style="font-size:11px;color:#555;margin-bottom:10px">For conspiracy content — face hidden character works better than talking avatar</div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <img id="characterPreview" src="" style="display:none;width:80px;height:80px;border-radius:8px;object-fit:cover;border:2px solid rgba(255,200,0,0.3)">
+        <div id="characterPlaceholder" style="width:80px;height:80px;border-radius:8px;background:#111;border:2px dashed #222;display:flex;align-items:center;justify-content:center;font-size:24px">👤</div>
+        <div style="flex:1">
+          <input type="file" id="characterUpload" accept="image/*" onchange="uploadCharacter(this)" style="font-size:11px;color:#666;width:100%">
+          <div style="font-size:10px;color:#555;margin-top:4px">Upload mysterious character photo</div>
+        </div>
+      </div>
     </div>
 
   </div>
@@ -2711,6 +2737,15 @@ async function deleteChannel(id) {
 let currentAvatarUrl = localStorage.getItem('xlab_avatar_url') || '';
 
 function loadAvatarUI() {
+  // Load saved character
+  const savedChar = localStorage.getItem('xlab_character_url') || '';
+  if (savedChar) {
+    const cp = document.getElementById('characterPreview');
+    const cph = document.getElementById('characterPlaceholder');
+    if (cp) { cp.src = savedChar; cp.style.display = 'block'; }
+    if (cph) { cph.style.display = 'none'; }
+  }
+
   if (currentAvatarUrl) {
     document.getElementById('avatarPreview').src = currentAvatarUrl;
     document.getElementById('avatarPreview').style.display = 'block';
@@ -2748,6 +2783,34 @@ async function generateAvatar() {
     btn.disabled = false;
     btn.textContent = '✨ Generate Avatar';
   }
+}
+
+function uploadCharacter(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const imageData = e.target.result;
+    // Save to server
+    try {
+      const r = await fetch('/api/save-character', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({image_data: imageData})
+      });
+      const data = await r.json();
+      if (data.success) {
+        localStorage.setItem('xlab_character_url', imageData);
+        document.getElementById('characterPreview').src = imageData;
+        document.getElementById('characterPreview').style.display = 'block';
+        document.getElementById('characterPlaceholder').style.display = 'none';
+        alert('✅ Mystery character saved! Used in conspiracy content.');
+      }
+    } catch(e) {
+      alert('Error: ' + e.message);
+    }
+  };
+  reader.readAsDataURL(file);
 }
 
 function uploadAvatar(input) {
@@ -2849,11 +2912,47 @@ function setConspToggle(key, val) {
   document.getElementById(n).classList.toggle('active', val==='No');
 }
 
+async function researchTopic() {
+  const topic = document.getElementById('conspCustomTopic').value.trim();
+  if (!topic) { alert('Enter a topic first'); return; }
+  const btn = document.getElementById('conspResearchBtn');
+  btn.textContent = '⏳';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/research-topic', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({topic, style: 'conspiracy'})
+    });
+    const data = await r.json();
+    const result = document.getElementById('conspResearchResult');
+    if (data.success && data.item) {
+      const item = data.item;
+      result.innerHTML = `
+        <div style="color:#fbbf24;font-weight:700;margin-bottom:4px">${item.title}</div>
+        <div style="color:#555;margin-bottom:4px">${item.hook}</div>
+        <div style="color:#444;font-size:10px">Search: ${item.search_query}</div>
+        ${data.item.wikipedia_source ? '<div style="color:#333;font-size:10px">Source: Wikipedia ✓</div>' : ''}
+      `;
+      result.style.display = 'block';
+    } else {
+      result.innerHTML = '<span style="color:#ff6b5b">Research failed — will use auto topics</span>';
+      result.style.display = 'block';
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+  } finally {
+    btn.textContent = '🔍 Research';
+    btn.disabled = false;
+  }
+}
+
 async function runConspiracy() {
   const btn = document.getElementById('conspBtn');
   btn.disabled = true;
   btn.textContent = '⏳ Generating...';
   try {
+    const customTopic = document.getElementById('conspCustomTopic')?.value?.trim() || '';
     const r = await fetch('/api/conspiracy', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -2861,6 +2960,7 @@ async function runConspiracy() {
         max_videos: parseInt(document.getElementById('conspMaxVideos').value),
         auto_upload: conspToggles.up,
         yt_access_token: getActiveToken() || '',
+        custom_topic: customTopic,
       })
     });
     const data = await r.json();

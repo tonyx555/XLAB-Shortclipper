@@ -2784,6 +2784,33 @@ def get_character_clip(clip_type='hook'):
     return None
 
 
+def prep_char_clip(clip_type, voice_text, out_path, character_path=None, fallback_dur=4):
+    """Get character clip from library, replace audio, normalize.
+    Standalone function accessible by all builders.
+    """
+    import shutil as _sh
+    lib = get_character_clip(clip_type)
+    if lib:
+        replaced = out_path + '_raw.mp4'
+        replace_clip_audio(lib, voice_text, replaced, 'conspiracy')
+        src = replaced if os.path.exists(replaced) else lib
+        norm = out_path + '_norm.mp4'
+        if normalize_clip(src, norm):
+            _sh.copy2(norm, out_path)
+        else:
+            _sh.copy2(src, out_path)
+        return os.path.exists(out_path)
+    elif character_path and os.path.exists(character_path):
+        subprocess.run([
+            'ffmpeg', '-loop', '1', '-i', character_path,
+            '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30',
+            '-t', str(fallback_dur), '-c:v', 'libx264', '-preset', 'fast',
+            '-crf', '22', '-pix_fmt', 'yuv420p', '-y', out_path, '-loglevel', 'quiet'
+        ], capture_output=True, timeout=30)
+        return os.path.exists(out_path)
+    return False
+
+
 def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path=None):
     """Build viral conspiracy Short with mysterious character format:
     - Character appears (no face shown = mystery)
@@ -2877,7 +2904,7 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
         walk_clip = f'{work_dir}/p3b_walk_{idx}.mp4'
         mid_facts = key_facts[0] if key_facts else 'Here is what they hide from you'
         walk_voice = f"[dramatic] {mid_facts}"
-        if prep_char_clip('walk', walk_voice, walk_clip):
+        if prep_char_clip('walk', walk_voice, walk_clip, character_path):
             clips.append(walk_clip)
             add_log(job_id, f'   ✅ Walk/reveal clip ready')
     except Exception as e:
@@ -2888,7 +2915,7 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
         closeup_clip = f'{work_dir}/p3c_close_{idx}.mp4'
         # Voice reacts to what was just shown
         close_voice = f"[dramatic] Now you know what they've been hiding. Follow if you want the truth every day."
-        if prep_char_clip('general', close_voice, closeup_clip, fallback_dur=6):
+        if prep_char_clip('general', close_voice, closeup_clip, character_path, fallback_dur=6):
             # If we have footage, create PIP fade-out at start of close up
             if demo_path and os.path.exists(demo_path) and os.path.exists(closeup_clip):
                 try:

@@ -519,8 +519,11 @@ def fetch_internet_archive_footage(query, work_dir, idx):
         
         for doc in docs:
             identifier = doc.get('identifier', '')
+            title = doc.get('title', identifier)
             if not identifier:
                 continue
+            
+            logger.info(f'Archive trying: {title[:60]}')
             
             # Get metadata for this item
             meta_r = req.get(
@@ -533,9 +536,10 @@ def fetch_internet_archive_footage(query, work_dir, idx):
             # Find best video file
             for f in files:
                 name = f.get('name', '')
-                if name.endswith('.mp4') and int(f.get('size', 0)) < 100*1024*1024:  # under 100MB
+                if name.endswith('.mp4') and int(f.get('size', 0)) < 100*1024*1024:
                     vid_url = f'https://archive.org/download/{identifier}/{name}'
                     dl_path = os.path.join(work_dir, f'archive_{idx}.mp4')
+                    logger.info(f'Archive downloading: {title[:40]}')
                     
                     r2 = req.get(vid_url, stream=True, timeout=120)
                     downloaded = 0

@@ -1291,6 +1291,60 @@ select { cursor: pointer; }
       <div style="font-size:11px;color:#555;line-height:1.7">Bold hooks · Historical facts · "Nobody talks about this" angle · Dramatic voiceover · Viral text overlays</div>
     </div>
 
+    <!-- Research Panel -->
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">🔍 Research Panel</div>
+      
+      <!-- Search bar -->
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input type="text" id="researchQuery" placeholder="phone surveillance, NSA, etc..." style="flex:1">
+        <button onclick="searchAll()" 
+          style="background:rgba(230,51,41,0.15);border:1px solid rgba(230,51,41,0.3);
+                 color:#ff6b5b;font-size:11px;font-weight:700;padding:0 12px;
+                 border-radius:10px;cursor:pointer;font-family:var(--font);white-space:nowrap">
+          🔍 Search
+        </button>
+      </div>
+
+      <!-- Tabs -->
+      <div style="display:flex;gap:4px;margin-bottom:10px">
+        <button onclick="switchResearchTab('yt')" id="rtab_yt"
+          style="flex:1;padding:6px;border-radius:8px;border:1px solid rgba(230,51,41,0.4);
+                 background:rgba(230,51,41,0.1);color:#ff6b5b;font-size:10px;
+                 font-weight:700;cursor:pointer;font-family:var(--font)">
+          ▶️ YouTube
+        </button>
+        <button onclick="switchResearchTab('x')" id="rtab_x"
+          style="flex:1;padding:6px;border-radius:8px;border:1px solid #1e1e1e;
+                 background:#0a0a0a;color:#555;font-size:10px;
+                 font-weight:700;cursor:pointer;font-family:var(--font)">
+          𝕏 Posts
+        </button>
+        <button onclick="switchResearchTab('gh')" id="rtab_gh"
+          style="flex:1;padding:6px;border-radius:8px;border:1px solid #1e1e1e;
+                 background:#0a0a0a;color:#555;font-size:10px;
+                 font-weight:700;cursor:pointer;font-family:var(--font)">
+          ⚡ GitHub
+        </button>
+      </div>
+
+      <!-- Results -->
+      <div id="researchResults" style="max-height:300px;overflow-y:auto">
+        <div style="font-size:11px;color:#333;text-align:center;padding:20px">
+          Search to find content for your video
+        </div>
+      </div>
+
+      <!-- Selected URL -->
+      <div id="selectedUrlBox" style="display:none;margin-top:8px;
+           background:#0a0a0a;border:1px solid rgba(230,51,41,0.2);
+           border-radius:8px;padding:8px">
+        <div style="font-size:10px;color:#ff6b5b;font-weight:700;margin-bottom:4px">Selected:</div>
+        <div id="selectedUrlText" style="font-size:10px;color:#888;word-break:break-all"></div>
+        <input type="hidden" id="conspYoutubeUrl">
+      </div>
+    </div>
+
     <div class="card" style="margin-bottom:10px">
       <div class="card-title">Custom Topic (optional)</div>
       <div style="display:flex;gap:8px">
@@ -3106,6 +3160,80 @@ function setConspToggle(key, val) {
   document.getElementById(n).classList.toggle('active', val==='No');
 }
 
+// ============================================================
+// Research Panel
+// ============================================================
+let currentResearchTab = 'yt';
+
+function switchResearchTab(tab) {
+  currentResearchTab = tab;
+  ['yt','x','gh'].forEach(t => {
+    const btn = document.getElementById('rtab_' + t);
+    const isActive = t === tab;
+    btn.style.background = isActive ? 'rgba(230,51,41,0.1)' : '#0a0a0a';
+    btn.style.borderColor = isActive ? 'rgba(230,51,41,0.4)' : '#1e1e1e';
+    btn.style.color = isActive ? '#ff6b5b' : '#555';
+  });
+}
+
+async function searchAll() {
+  const q = document.getElementById('researchQuery').value.trim();
+  if (!q) { alert('Enter a search term'); return; }
+  
+  const results = document.getElementById('researchResults');
+  results.innerHTML = '<div style="font-size:11px;color:#555;text-align:center;padding:20px">⏳ Searching...</div>';
+
+  try {
+    const r = await fetch('/api/research-search', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: q, type: currentResearchTab})
+    });
+    const data = await r.json();
+    renderResearchResults(data, currentResearchTab);
+  } catch(e) {
+    results.innerHTML = '<div style="font-size:11px;color:#ff6b5b;text-align:center;padding:20px">Error: ' + e.message + '</div>';
+  }
+}
+
+function renderResearchResults(data, type) {
+  const results = document.getElementById('researchResults');
+  const items = data.items || [];
+  
+  if (!items.length) {
+    results.innerHTML = '<div style="font-size:11px;color:#333;text-align:center;padding:20px">No results found</div>';
+    return;
+  }
+
+  results.innerHTML = items.map(item => `
+    <div onclick="selectResearchItem('${(item.url||'').replace(/'/g,"\'")}', '${(item.title||'').replace(/'/g,"\'").substring(0,40)}')"
+      style="padding:10px;border-bottom:1px solid #0f0f0f;cursor:pointer;
+             transition:background 0.1s"
+      onmouseover="this.style.background='#0a0a0a'"
+      onmouseout="this.style.background='transparent'">
+      <div style="font-size:11px;color:#e8e8f0;font-weight:600;margin-bottom:3px">${item.title||''}</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        ${item.thumbnail ? `<img src="${item.thumbnail}" style="width:60px;height:34px;border-radius:4px;object-fit:cover">` : ''}
+        <div>
+          <div style="font-size:10px;color:#555">${item.meta||''}</div>
+          <div style="font-size:10px;color:#333;word-break:break-all">${(item.url||'').substring(0,50)}...</div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function selectResearchItem(url, title) {
+  document.getElementById('conspYoutubeUrl').value = url;
+  document.getElementById('selectedUrlBox').style.display = 'block';
+  document.getElementById('selectedUrlText').textContent = title + ' — ' + url;
+  // Also fill topic if empty
+  const topicField = document.getElementById('conspCustomTopic');
+  if (topicField && !topicField.value) {
+    topicField.value = title;
+  }
+}
+
 async function researchTopic() {
   const topic = document.getElementById('conspCustomTopic').value.trim();
   if (!topic) { alert('Enter a topic first'); return; }
@@ -3155,6 +3283,7 @@ async function runConspiracy() {
         auto_upload: conspToggles.up,
         yt_access_token: getActiveToken() || '',
         custom_topic: customTopic,
+        youtube_url: document.getElementById('conspYoutubeUrl')?.value?.trim() || '',
       })
     });
     const data = await r.json();

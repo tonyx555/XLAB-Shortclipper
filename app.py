@@ -522,6 +522,13 @@ def fetch_internet_archive_footage(query, work_dir, idx):
             title = doc.get('title', identifier)
             if not identifier:
                 continue
+
+            # Basic relevance check — title should contain at least one query word
+            query_words = [w.lower() for w in query.split() if len(w) > 3]
+            title_lower = title.lower()
+            if query_words and not any(w in title_lower for w in query_words):
+                logger.info(f'Archive skipping irrelevant: {title[:40]}')
+                continue
             
             logger.info(f'Archive trying: {title[:60]}')
             
@@ -2553,6 +2560,29 @@ def smart_fetch_visuals(item, work_dir, idx):
     style = item.get('category', 'conspiracy')
     text = item.get('script', '') + item.get('x_source', '')
 
+    # 0. Manual YouTube URL — highest priority if provided
+    manual_url = item.get('youtube_url', '').strip()
+    if manual_url and 'youtube' in manual_url:
+        add_log_safe(f'   📹 Using manual YouTube URL...')
+        rapidapi_key = os.environ.get('RAPIDAPI_KEY', '')
+        if rapidapi_key:
+            dl_path = download_via_rapidapi(manual_url, work_dir, f'manual_{idx}')
+            if dl_path:
+                try:
+                    dur = get_duration(dl_path)
+                    start = max(0, dur * 0.1)
+                    cut_path = f'{work_dir}/manual_cut_{idx}.mp4'
+                    cut_vertical(dl_path, start, 25, cut_path, is_vertical(dl_path))
+                    if not is_vertical(cut_path):
+                        vert = f'{work_dir}/manual_vert_{idx}.mp4'
+                        if smart_crop_vertical(cut_path, vert):
+                            cut_path = vert
+                    if os.path.exists(cut_path) and os.path.getsize(cut_path) > 100000:
+                        add_log_safe(f'   ✅ Manual URL clip ready')
+                        return cut_path, 'youtube_manual'
+                except Exception as e:
+                    logger.error(f'Manual URL error: {e}')
+
     # 1. YouTube FIRST — most relevant results
     add_log_safe('   📹 Searching YouTube for relevant footage...')
     rapidapi_key = os.environ.get('RAPIDAPI_KEY', '')
@@ -3127,7 +3157,17 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
             add_log(job_id, f'   🎙️ Adding narration over footage...')
             narr_path = f'{work_dir}/narr_{idx}.mp3'
             narrated = f'{work_dir}/narrated_{idx}.mp4'
-            if text_to_speech(script, narr_path, style='conspiracy'):
+            # Use FULL script — hook + body + key facts
+            full_script = item.get('script', '')
+            if not full_script or len(full_script) < 30:
+                # Build from parts if script is empty
+                full_script = (
+                    item.get('hook', '') + '. ' +
+                    ' '.join(item.get('key_facts', [])) + '. ' +
+                    item.get('script', '')
+                ).strip()
+            logger.info(f'Narrating script: {full_script[:80]}')
+            if text_to_speech(full_script, narr_path, style='conspiracy'):
                 if overlay_narration(demo_path, narr_path, narrated):
                     if os.path.exists(narrated):
                         demo_path = narrated
@@ -3153,18 +3193,7 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
             clips.append(demo_path)
             add_log(job_id, f'   ⚠️ Footage processing: {str(e)[:40]}')
 
-    # ── Part 3b: Walk + opens suitcase — mid reveal ──────────
-    try:
-        walk_clip = f'{work_dir}/p3b_walk_{idx}.mp4'
-        mid_facts = key_facts[0] if key_facts else 'Here is what they hide from you'
-        walk_voice = f"[dramatic] {mid_facts}"
-        if prep_char_clip('walk', walk_voice, walk_clip, character_path):
-            clips.append(walk_clip)
-            add_log(job_id, f'   ✅ Walk/reveal clip ready')
-    except Exception as e:
-        add_log(job_id, f'   ⚠️ Walk clip error: {str(e)[:40]}')
-
-    # ── Part 3c: Close up with footage fading behind him ──────
+    # ── Part 3b: Close up — brief reaction after footage ─────
     try:
         closeup_clip = f'{work_dir}/p3c_close_{idx}.mp4'
         # Voice reacts to what was just shown
@@ -3212,7 +3241,7 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
     except Exception as e:
         add_log(job_id, f'   ⚠️ Close up error: {str(e)[:40]}')
 
-    # ── Part 4: Window writing CTA (5s) ──────────────────────
+    # ── Part 4: Apple bite CTA — immediately after close up ──
     try:
         cta_card = f'{work_dir}/cta_{idx}.mp4'
         # Title to write on window — short version
@@ -3388,6 +3417,8 @@ def process_conspiracy_studio(job_id, params):
         add_log(job_id, '🔍 Researching content...')
         update_job(job_id, {'progress': 5})
 
+        youtube_url = params.get('youtube_url', '').strip()
+
         if custom_topic:
             add_log(job_id, f'   📚 Researching: {custom_topic[:50]}')
             
@@ -3421,6 +3452,8 @@ def process_conspiracy_studio(job_id, params):
                     'hashtags': ['#conspiracy', '#truth', '#didyouknow', '#shorts', '#viral']
                 }
             
+            if youtube_url:
+                item['youtube_url'] = youtube_url
             data = {'items': [item] * min(max_videos, 3)}
             add_log(job_id, f'   ✅ Script ready: {item.get("title","")[:50]}')
         else:
@@ -3850,13 +3883,19 @@ def text_to_speech(text, output_path, style='normal'):
     groq_key = os.environ.get('GROQ_API_KEY', '').strip()
     elevenlabs_key = os.environ.get('ELEVENLABS_API_KEY', '').strip()
 
-    styled = f'[dramatic] {text}' if style == 'conspiracy' and groq_key else text
+    # Young masculine voice — atlas sounds like confident 25yo
+    if style == 'conspiracy' and groq_key:
+        styled = f'[deep] {text}'
+    elif groq_key:
+        styled = text
+    else:
+        styled = text
 
     # 1. Groq Orpheus — best, free
     if groq_key:
         try:
             wav_path = output_path.replace('.mp3', '.wav')
-            if groq_tts(styled, wav_path, groq_key, voice='zeus'):
+            if groq_tts(styled, wav_path, groq_key, voice='atlas'):
                 result = subprocess.run([
                     'ffmpeg', '-i', wav_path, '-acodec', 'libmp3lame',
                     '-q:a', '2', '-y', output_path, '-loglevel', 'quiet'
@@ -5445,6 +5484,137 @@ def stripe_webhook():
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/research-search', methods=['POST'])
+def research_search():
+    """Search YouTube, X posts, or GitHub for content research."""
+    import requests as req
+    data = request.json or {}
+    query = data.get('query', '')
+    search_type = data.get('type', 'yt')
+
+    if not query:
+        return jsonify({'items': []})
+
+    items = []
+
+    if search_type == 'yt':
+        # YouTube search via RapidAPI
+        api_key = os.environ.get('RAPIDAPI_KEY', '')
+        if api_key:
+            try:
+                r = req.get(
+                    'https://youtube-media-downloader.p.rapidapi.com/v2/search/videos',
+                    params={'query': query, 'hl': 'en', 'gl': 'US'},
+                    headers={
+                        'x-rapidapi-key': api_key,
+                        'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com'
+                    },
+                    timeout=15
+                )
+                for v in r.json().get('items', [])[:8]:
+                    vid_id = v.get('id', '')
+                    thumb = ''
+                    thumbs = v.get('thumbnails', [])
+                    if thumbs:
+                        thumb = thumbs[0].get('url', '') if isinstance(thumbs[0], dict) else ''
+                    items.append({
+                        'title': v.get('title', '')[:60],
+                        'url': f'https://youtube.com/watch?v={vid_id}',
+                        'thumbnail': thumb,
+                        'meta': v.get('publishedTimeText', '') + ' · ' + str(v.get('viewCount', {}).get('text', ''))
+                    })
+            except Exception as e:
+                logger.error(f'YouTube research search error: {e}')
+
+    elif search_type == 'x':
+        # X/Twitter search
+        bearer = os.environ.get('X_BEARER_TOKEN', '').strip()
+        if bearer:
+            try:
+                r = req.get(
+                    'https://api.twitter.com/2/tweets/search/recent',
+                    headers={'Authorization': f'Bearer {bearer}'},
+                    params={
+                        'query': query + ' -is:retweet lang:en',
+                        'max_results': 10,
+                        'tweet.fields': 'public_metrics,created_at,entities',
+                        'expansions': 'author_id',
+                        'user.fields': 'username'
+                    },
+                    timeout=15
+                )
+                data_x = r.json()
+                users = {u['id']: u['username'] for u in data_x.get('includes', {}).get('users', [])}
+                for t in sorted(data_x.get('data', []),
+                               key=lambda x: x.get('public_metrics', {}).get('like_count', 0),
+                               reverse=True)[:8]:
+                    author_id = t.get('author_id', '')
+                    username = users.get(author_id, 'unknown')
+                    likes = t.get('public_metrics', {}).get('like_count', 0)
+                    items.append({
+                        'title': t.get('text', '')[:80],
+                        'url': f'https://x.com/{username}/status/{t["id"]}',
+                        'thumbnail': '',
+                        'meta': f'@{username} · ❤️ {likes}'
+                    })
+            except Exception as e:
+                logger.error(f'X research search error: {e}')
+        else:
+            items.append({'title': 'X_BEARER_TOKEN not set in Railway', 'url': '', 'meta': ''})
+
+    elif search_type == 'gh':
+        # GitHub search
+        try:
+            r = req.get(
+                'https://api.github.com/search/repositories',
+                params={'q': query, 'sort': 'stars', 'order': 'desc', 'per_page': 8},
+                headers={'Accept': 'application/vnd.github.v3+json'},
+                timeout=15
+            )
+            for repo in r.json().get('items', [])[:8]:
+                items.append({
+                    'title': repo.get('full_name', ''),
+                    'url': repo.get('html_url', ''),
+                    'thumbnail': repo.get('owner', {}).get('avatar_url', ''),
+                    'meta': f'⭐ {repo.get("stargazers_count", 0):,} · {repo.get("description", "")[:50]}'
+                })
+        except Exception as e:
+            logger.error(f'GitHub search error: {e}')
+
+    return jsonify({'items': items, 'type': search_type, 'query': query})
+
+
+@app.route('/api/test-youtube-search', methods=['GET'])
+def test_youtube_search():
+    """Test YouTube search via RapidAPI."""
+    import requests as req
+    query = request.args.get('q', 'phone surveillance documentary')
+    api_key = os.environ.get('RAPIDAPI_KEY', '')
+    if not api_key:
+        return jsonify({'error': 'No RAPIDAPI_KEY'})
+    try:
+        r = req.get(
+            'https://youtube-media-downloader.p.rapidapi.com/v2/search/videos',
+            params={'query': query, 'hl': 'en', 'gl': 'US'},
+            headers={
+                'x-rapidapi-key': api_key,
+                'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com'
+            },
+            timeout=15
+        )
+        data = r.json()
+        items = data.get('items', [])
+        return jsonify({
+            'query': query,
+            'status': r.status_code,
+            'count': len(items),
+            'first_3': [{'id': i.get('id'), 'title': i.get('title','')} 
+                       for i in items[:3]]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)})
 
 
 @app.route('/api/test-download', methods=['GET'])

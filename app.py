@@ -1783,6 +1783,56 @@ def process_universal_studio(job_id, params):
         update_job(job_id, {'status': 'error', 'error': str(e)})
 
 
+def research_with_claude_search(topic, api_key=None):
+    """Use Claude API with web search tool — searches the real web.
+    Uses the same Anthropic API key if available.
+    Returns rich web research results.
+    """
+    import requests as req
+    key = api_key or os.environ.get('ANTHROPIC_API_KEY', '') or os.environ.get('CLAUDE_API_KEY', '')
+    # Try Gemini key format too — sometimes stored as CLAUDE_API_KEY
+    if not key or key.startswith('AIza'):
+        key = None
+    
+    if not key:
+        return None
+    
+    try:
+        r = req.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'x-api-key': key,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json'
+            },
+            json={
+                'model': 'claude-sonnet-4-6',
+                'max_tokens': 1024,
+                'tools': [{'type': 'web_search_20250305', 'name': 'web_search'}],
+                'messages': [{
+                    'role': 'user',
+                    'content': f'Search the web and find shocking, interesting, little-known facts about: {topic}. Focus on things most people dont know. Return the key facts you find.'
+                }]
+            },
+            timeout=30
+        )
+        data = r.json()
+        if 'content' in data:
+            text = ' '.join([
+                block.get('text', '') 
+                for block in data['content'] 
+                if block.get('type') == 'text'
+            ])
+            if text:
+                logger.info(f'Claude web search: {len(text)} chars for "{topic}"')
+                return text
+        logger.error(f'Claude search error: {str(data)[:100]}')
+        return None
+    except Exception as e:
+        logger.error(f'Claude search error: {e}')
+        return None
+
+
 def search_brave(query, api_key=None):
     """Search web using Brave Search API — 2000 free searches/month.
     Get free key at api.search.brave.com
@@ -1851,11 +1901,18 @@ def research_topic_web(topic):
     import requests as req
     results = {'topic': topic, 'content': '', 'sources': [], 'images': []}
 
-    # Source 1: Gemini with Google Search grounding (best — uses real web)
-    grounded = search_gemini_grounded(topic)
-    if grounded:
-        results['content'] += grounded + '\n\n'
-        logger.info(f'Using Gemini grounded search for "{topic}"')
+    # Source 1: Claude with web search tool (real web search)
+    claude_result = research_with_claude_search(topic)
+    if claude_result:
+        results['content'] += claude_result + '\n\n'
+        logger.info(f'Using Claude web search for "{topic}"')
+
+    # Source 2: Gemini with Google Search grounding
+    if not results['content']:
+        grounded = search_gemini_grounded(topic)
+        if grounded:
+            results['content'] += grounded + '\n\n'
+            logger.info(f'Using Gemini grounded search for "{topic}"')
 
     # Source 2: Brave Search (if API key available)
     brave_results = search_brave(topic)
@@ -4759,6 +4816,44 @@ def list_grok_models():
         return jsonify(r.json())
     except Exception as e:
         return jsonify({'error': str(e)})
+
+
+@app.route('/api/test-research', methods=['GET'])
+def test_research():
+    topic = request.args.get('topic', 'Colonial America farming laws')
+    gemini_key = os.environ.get('GEMINI_API_KEY', '') or os.environ.get('CLAUDE_API_KEY', '')
+    brave_key = os.environ.get('BRAVE_API_KEY', '')
+    
+    results = {
+        'gemini_key': bool(gemini_key),
+        'brave_key': bool(brave_key),
+        'topic': topic
+    }
+    
+    # Test DuckDuckGo (no key needed)
+    import requests as req
+    try:
+        r = req.get('https://api.duckduckgo.com/',
+            params={'q': topic, 'format': 'json', 'no_html': 1},
+            timeout=10)
+        data = r.json()
+        results['ddg_abstract'] = data.get('AbstractText', '')[:100]
+        results['ddg_ok'] = bool(data.get('AbstractText'))
+    except Exception as e:
+        results['ddg_error'] = str(e)
+    
+    # Test Gemini grounded
+    if gemini_key:
+        text = search_gemini_grounded(topic, gemini_key)
+        results['gemini_result'] = text[:100] if text else None
+        results['gemini_ok'] = bool(text)
+    
+    # Test Brave
+    if brave_key:
+        snippets = search_brave(topic, brave_key)
+        results['brave_count'] = len(snippets)
+    
+    return jsonify(results)
 
 
 @app.route('/api/research-topic', methods=['POST'])

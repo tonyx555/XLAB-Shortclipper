@@ -3068,17 +3068,25 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
         music_out = f'{work_dir}/music_{idx}.mp4'
         if add_trending_music(final_path, music_out, 'dramatic', 0.15):
             final_path = music_out
-        # Compress final video to ~15-20MB for easy sharing
-        compressed = final_path.replace('.mp4', '_compressed.mp4')
+        # Re-encode for iPhone/iOS compatibility
+        iphone_path = final_path.replace('.mp4', '_ios.mp4')
         comp_result = subprocess.run([
             'ffmpeg', '-i', final_path,
-            '-c:v', 'libx264', '-preset', 'medium', '-crf', '24',
-            '-c:a', 'aac', '-b:a', '96k',
-            '-movflags', '+faststart',
-            '-y', compressed, '-loglevel', 'quiet'
+            '-c:v', 'libx264',
+            '-profile:v', 'baseline',  # iPhone compatible profile
+            '-level', '3.1',
+            '-preset', 'medium', '-crf', '24',
+            '-c:a', 'aac',
+            '-ar', '44100',
+            '-ac', '2',
+            '-b:a', '128k',
+            '-pix_fmt', 'yuv420p',  # required for iOS
+            '-movflags', '+faststart',  # streaming friendly
+            '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',  # ensure even dimensions
+            '-y', iphone_path, '-loglevel', 'quiet'
         ], capture_output=True, timeout=120)
-        if os.path.exists(compressed) and os.path.getsize(compressed) > 100000:
-            final_path = compressed
+        if os.path.exists(iphone_path) and os.path.getsize(iphone_path) > 100000:
+            final_path = iphone_path
         size = os.path.getsize(final_path) / (1024*1024)
         add_log(job_id, f'   ✅ Conspiracy Short ready ({size:.1f}MB)')
         return final_path

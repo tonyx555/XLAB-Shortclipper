@@ -3208,18 +3208,24 @@ def process_conspiracy_studio(job_id, params):
         if not produced:
             raise Exception('No videos produced')
 
+        # Use first video as main download — direct MP4, no ZIP
+        main_video = produced[0]['path'] if produced else None
+        zip_size = os.path.getsize(main_video) / (1024*1024) if main_video else 0
+
+        # Still create ZIP for multiple videos
         zip_name = f'{work_dir}/conspiracy_{job_id[:8]}.zip'
         with zipfile.ZipFile(zip_name, 'w') as zf:
             for v in produced:
                 if os.path.exists(v['path']):
                     zf.write(v['path'], os.path.basename(v['path']))
 
-        zip_size = os.path.getsize(zip_name) / (1024*1024)
         add_log(job_id, f'\n🎉 Done! {len(produced)} videos ready')
         update_job(job_id, {
             'status': 'done', 'progress': 100,
             'completed_at': datetime.now().isoformat(),
-            'zip_path': zip_name, 'zip_size_mb': round(zip_size, 1),
+            'zip_path': zip_name,
+            'mp4_path': main_video,
+            'zip_size_mb': round(zip_size, 1),
             'total_clips': len(produced)
         })
 
@@ -5587,6 +5593,61 @@ def job_logs(job_id):
     if not job:
         return jsonify({'logs': [], 'status': 'unknown', 'progress': 0})
     return jsonify({'logs': job.get('logs', []), 'status': job.get('status',''), 'progress': job.get('progress', 0)})
+
+@app.route('/api/jobs/<job_id>/download-mp4', methods=['GET'])
+def download_mp4(job_id):
+    """Download single MP4 directly — iPhone compatible."""
+    job = get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    mp4_path = job.get('mp4_path', '')
+    
+    # Find MP4 if not stored
+    if not mp4_path or not os.path.exists(mp4_path):
+        work_dirs = [
+            f'/tmp/conspiracy_{job_id}',
+            f'/tmp/universal_{job_id}',
+            f'/tmp/ainews_{job_id}',
+            f'/tmp/studio_{job_id}',
+        ]
+        for d in work_dirs:
+            if os.path.exists(d):
+                # Find the iOS encoded file first
+                for f in sorted(os.listdir(d), reverse=True):
+                    if f.endswith('_ios.mp4'):
+                        mp4_path = os.path.join(d, f)
+                        break
+                if not mp4_path:
+                    for f in sorted(os.listdir(d), reverse=True):
+                        fp = os.path.join(d, f)
+                        if f.endswith('.mp4') and os.path.getsize(fp) > 1000000:
+                            mp4_path = fp
+                            break
+            if mp4_path:
+                break
+    
+    if not mp4_path or not os.path.exists(mp4_path):
+        return jsonify({'error': 'File not found'}), 404
+    
+    from flask import Response
+    import io
+    
+    with open(mp4_path, 'rb') as f:
+        data = f.read()
+    
+    response = Response(
+        data,
+        mimetype='video/mp4',
+        headers={
+            'Content-Disposition': f'attachment; filename="xlab_{job_id[:8]}.mp4"',
+            'Content-Type': 'video/mp4',
+            'Content-Length': str(len(data)),
+            'X-Content-Type-Options': 'nosniff'
+        }
+    )
+    return response
+
 
 @app.route('/api/jobs/<job_id>/download', methods=['GET'])
 def download_zip(job_id):

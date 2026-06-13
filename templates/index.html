@@ -1652,13 +1652,57 @@ select { cursor: pointer; }
 
     <div class="card" style="margin-bottom:12px;border-color:rgba(255,200,0,0.2)">
       <div class="card-title">👀 Mystery Character</div>
-      <div style="font-size:11px;color:#555;margin-bottom:10px">For conspiracy content — face hidden character works better than talking avatar</div>
-      <div style="display:flex;gap:10px;align-items:center">
+      <div style="font-size:11px;color:#555;margin-bottom:10px">Photo for still image + pre-generated Grok video clips</div>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
         <img id="characterPreview" src="" style="display:none;width:80px;height:80px;border-radius:8px;object-fit:cover;border:2px solid rgba(255,200,0,0.3)">
         <div id="characterPlaceholder" style="width:80px;height:80px;border-radius:8px;background:#111;border:2px dashed #222;display:flex;align-items:center;justify-content:center;font-size:24px">👤</div>
         <div style="flex:1">
           <input type="file" id="characterUpload" accept="image/*" onchange="uploadCharacter(this)" style="font-size:11px;color:#666;width:100%">
-          <div style="font-size:10px;color:#555;margin-top:4px">Upload mysterious character photo</div>
+          <div style="font-size:10px;color:#555;margin-top:4px">Character photo (used as still)</div>
+        </div>
+      </div>
+
+      <div style="border-top:1px solid #111;padding-top:10px">
+        <div style="font-size:11px;color:#fbbf24;font-weight:700;margin-bottom:8px">🎬 Pre-generated Video Clips</div>
+        <div style="font-size:10px;color:#444;margin-bottom:10px">Generate clips on grok.com then upload here — used in every video</div>
+        
+        <div id="clipLibrary" style="margin-bottom:10px"></div>
+
+        <!-- Single upload button -->
+        <button onclick="document.getElementById('clipUploadMain').click()"
+          class="btn btn-red" style="width:100%;margin-bottom:10px">
+          ➕ Upload Character Clip
+        </button>
+        <input type="file" id="clipUploadMain" accept="video/*" multiple onchange="uploadClipWithLabel(this)" style="display:none">
+
+        <!-- Hidden type selectors still available -->
+        <input type="file" id="clipUpload_hook" accept="video/*" onchange="uploadClip(this,'hook')" style="display:none">
+        <input type="file" id="clipUpload_cta" accept="video/*" onchange="uploadClip(this,'cta')" style="display:none">
+        <input type="file" id="clipUpload_walk" accept="video/*" onchange="uploadClip(this,'walk')" style="display:none">
+        <input type="file" id="clipUpload_general" accept="video/*" onchange="uploadClip(this,'general')" style="display:none">
+
+        <!-- Quick type buttons -->
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+          <button onclick="document.getElementById('clipUpload_hook').click()"
+            style="background:#111;border:1px solid #1e1e1e;color:#555;font-size:10px;padding:5px 10px;border-radius:20px;cursor:pointer;font-family:var(--font)">
+            🎬 Hook
+          </button>
+          <button onclick="document.getElementById('clipUpload_cta').click()"
+            style="background:#111;border:1px solid #1e1e1e;color:#555;font-size:10px;padding:5px 10px;border-radius:20px;cursor:pointer;font-family:var(--font)">
+            🍎 CTA
+          </button>
+          <button onclick="document.getElementById('clipUpload_walk').click()"
+            style="background:#111;border:1px solid #1e1e1e;color:#555;font-size:10px;padding:5px 10px;border-radius:20px;cursor:pointer;font-family:var(--font)">
+            🚶 Walk
+          </button>
+          <button onclick="document.getElementById('clipUpload_general').click()"
+            style="background:#111;border:1px solid #1e1e1e;color:#555;font-size:10px;padding:5px 10px;border-radius:20px;cursor:pointer;font-family:var(--font)">
+            👤 General
+          </button>
+        </div>
+
+        <div style="font-size:10px;color:#333;margin-top:4px">
+          💡 Upload multiple clips at once — XLAB picks randomly each video
         </div>
       </div>
     </div>
@@ -2785,6 +2829,149 @@ async function generateAvatar() {
   }
 }
 
+async function uploadClipWithLabel(input) {
+  const files = Array.from(input.files);
+  if (!files.length) return;
+
+  // Show type picker modal for each file
+  for (const file of files) {
+    const type = await pickClipType(file.name);
+    if (!type) continue;
+    await uploadClipFile(file, type);
+  }
+  loadClipLibrary();
+}
+
+function pickClipType(filename) {
+  return new Promise((resolve) => {
+    const types = ['hook', 'cta', 'walk', 'general'];
+    const labels = {
+      hook: '🎬 Hook (intro — suitcase zoom)',
+      cta: '🍎 CTA (apple bite ending)',
+      walk: '🚶 Walk (opens suitcase mid)',
+      general: '👤 General (close up talking)'
+    };
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+    overlay.innerHTML = `
+      <div style="background:#111;border:1px solid #222;border-radius:16px;padding:20px;width:100%;max-width:360px">
+        <div style="font-size:13px;font-weight:700;color:white;margin-bottom:4px">Label this clip</div>
+        <div style="font-size:11px;color:#555;margin-bottom:14px">${filename}</div>
+        ${types.map(t => `
+          <button onclick="window._pickType('${t}')"
+            style="display:block;width:100%;background:#0a0a0a;border:1px solid #1e1e1e;color:#888;
+                   font-size:12px;padding:12px;border-radius:10px;cursor:pointer;
+                   font-family:var(--font);text-align:left;margin-bottom:8px">
+            ${labels[t]}
+          </button>
+        `).join('')}
+        <button onclick="window._pickType(null)"
+          style="display:block;width:100%;background:none;border:none;color:#444;font-size:11px;cursor:pointer;padding:8px;font-family:var(--font)">
+          Cancel
+        </button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    window._pickType = (type) => {
+      document.body.removeChild(overlay);
+      resolve(type);
+    };
+  });
+}
+
+async function uploadClipFile(file, type) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const r = await fetch('/api/character-clips/upload', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            clip_data: e.target.result,
+            name: file.name.replace('.mp4','').replace('.mov',''),
+            type
+          })
+        });
+        const data = await r.json();
+        if (data.success) {
+          alert('✅ ' + type + ' clip uploaded (' + data.size_mb + 'MB)');
+        } else {
+          alert('Error: ' + (data.error || 'Unknown'));
+        }
+      } catch(e) {
+        alert('Upload error: ' + e.message);
+      }
+      resolve();
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function loadClipLibrary() {
+  try {
+    const r = await fetch('/api/character-clips');
+    const data = await r.json();
+    const lib = document.getElementById('clipLibrary');
+    if (!lib) return;
+    if (!data.clips || data.clips.length === 0) {
+      lib.innerHTML = '<div style="font-size:10px;color:#333">No clips uploaded yet</div>';
+      return;
+    }
+    lib.innerHTML = data.clips.map(c => `
+      <div style="display:flex;justify-content:space-between;align-items:center;
+                  padding:6px 8px;background:#0a0a0a;border:1px solid #1e1e1e;
+                  border-radius:6px;margin-bottom:4px">
+        <div>
+          <span style="font-size:11px;color:#888">${c.name}</span>
+          <span style="font-size:10px;color:#444;margin-left:6px">${c.size_mb}MB</span>
+        </div>
+        <button onclick="deleteClip('${c.filename}')"
+          style="background:none;border:none;color:#444;font-size:14px;cursor:pointer">✕</button>
+      </div>
+    `).join('');
+  } catch(e) {}
+}
+
+async function uploadClip(input, type) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try {
+      const r = await fetch('/api/character-clips/upload', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          clip_data: e.target.result,
+          name: file.name.replace('.mp4',''),
+          type: type
+        })
+      });
+      const data = await r.json();
+      if (data.success) {
+        alert('✅ ' + type + ' clip uploaded! (' + data.size_mb + 'MB)');
+        loadClipLibrary();
+      } else {
+        alert('Error: ' + data.error);
+      }
+    } catch(e) {
+      alert('Upload error: ' + e.message);
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+async function deleteClip(filename) {
+  await fetch('/api/character-clips/delete', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({filename})
+  });
+  loadClipLibrary();
+}
+
 function uploadCharacter(input) {
   const file = input.files[0];
   if (!file) return;
@@ -3310,7 +3497,7 @@ async function loadKeyStatuses() {
 }
 
 window.addEventListener('load', () => {
-  const inits = [initAuth, initYouTubeUI, loadSchedules, renderHistory, loadLibrary, loadChannels, loadKeyStatuses, loadAvatarUI, loadNiches];
+  const inits = [initAuth, initYouTubeUI, loadSchedules, renderHistory, loadLibrary, loadChannels, loadKeyStatuses, loadAvatarUI, loadNiches, loadClipLibrary];
   inits.forEach(fn => { try { fn(); } catch(e) { console.warn('Init error:', fn.name, e); } });
   // Load saved Grok key
   try {

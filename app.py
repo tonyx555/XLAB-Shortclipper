@@ -1783,8 +1783,233 @@ def process_universal_studio(job_id, params):
         update_job(job_id, {'status': 'error', 'error': str(e)})
 
 
+def search_brave(query, api_key=None):
+    """Search web using Brave Search API — 2000 free searches/month.
+    Get free key at api.search.brave.com
+    """
+    import requests as req
+    key = api_key or os.environ.get('BRAVE_API_KEY', '')
+    if not key:
+        return []
+    try:
+        r = req.get(
+            'https://api.search.brave.com/res/v1/web/search',
+            headers={
+                'Accept': 'application/json',
+                'Accept-Encoding': 'gzip',
+                'X-Subscription-Token': key
+            },
+            params={'q': query, 'count': 5, 'search_lang': 'en'},
+            timeout=10
+        )
+        results = r.json().get('web', {}).get('results', [])
+        snippets = []
+        for r in results:
+            title = r.get('title', '')
+            desc = r.get('description', '')
+            url = r.get('url', '')
+            if desc:
+                snippets.append(f"{title}: {desc} ({url})")
+        logger.info(f'Brave search: {len(snippets)} results for "{query}"')
+        return snippets
+    except Exception as e:
+        logger.error(f'Brave search error: {e}')
+        return []
+
+
+def search_gemini_grounded(query, api_key=None):
+    """Use Gemini with Google Search grounding for real web results.
+    Same free API key, returns current web information.
+    """
+    import requests as req
+    key = api_key or os.environ.get('GEMINI_API_KEY', '') or os.environ.get('CLAUDE_API_KEY', '')
+    if not key:
+        return None
+    try:
+        r = req.post(
+            f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}',
+            json={
+                'contents': [{'parts': [{'text': f'Research this topic thoroughly using current web information: {query}. Provide key facts, recent developments, and interesting details.'}]}],
+                'tools': [{'google_search_retrieval': {}}],
+                'generationConfig': {'maxOutputTokens': 1500}
+            },
+            timeout=30
+        )
+        data = r.json()
+        if 'candidates' in data:
+            text = data['candidates'][0]['content']['parts'][0]['text']
+            logger.info(f'Gemini grounded: {len(text)} chars for "{query}"')
+            return text
+        return None
+    except Exception as e:
+        logger.error(f'Gemini grounded error: {e}')
+        return None
+
+
+def research_topic_web(topic):
+    """Research using real web search — multiple free sources."""
+    import requests as req
+    results = {'topic': topic, 'content': '', 'sources': [], 'images': []}
+
+    # Source 1: Gemini with Google Search grounding (best — uses real web)
+    grounded = search_gemini_grounded(topic)
+    if grounded:
+        results['content'] += grounded + '\n\n'
+        logger.info(f'Using Gemini grounded search for "{topic}"')
+
+    # Source 2: Brave Search (if API key available)
+    brave_results = search_brave(topic)
+    if brave_results:
+        results['content'] += 'Web results:\n'
+        for r in brave_results[:3]:
+            results['content'] += f'- {r}\n'
+
+    # Source 3: DuckDuckGo Instant Answer (no key needed)
+    if not results['content']:
+        try:
+            r = req.get(
+                'https://api.duckduckgo.com/',
+                params={'q': topic, 'format': 'json', 'no_html': 1},
+                timeout=10
+            )
+            data = r.json()
+            abstract = data.get('AbstractText', '')
+            if abstract:
+                results['content'] += 'Overview: ' + abstract + '\n\n'
+            for rt in data.get('RelatedTopics', [])[:3]:
+                if isinstance(rt, dict) and rt.get('Text'):
+                    results['content'] += '- ' + rt['Text'][:150] + '\n'
+        except Exception as e:
+            logger.error(f'DuckDuckGo error: {e}')
+
+    # Source 4: Wikipedia always as backup
+    if len(results['content']) < 200:
+        try:
+            r = req.get(
+                'https://en.wikipedia.org/w/api.php',
+                params={'action': 'query', 'list': 'search', 'srsearch': topic,
+                        'format': 'json', 'srlimit': 1},
+                timeout=10
+            )
+            wiki_results = r.json().get('query', {}).get('search', [])
+            if wiki_results:
+                page_title = wiki_results[0]['title']
+                cr = req.get(
+                    'https://en.wikipedia.org/w/api.php',
+                    params={'action': 'query', 'titles': page_title,
+                            'prop': 'extracts', 'exintro': True,
+                            'explaintext': True, 'format': 'json'},
+                    timeout=10
+                )
+                pages = cr.json().get('query', {}).get('pages', {})
+                page = next(iter(pages.values()))
+                extract = page.get('extract', '')[:1000]
+                if extract:
+                    results['content'] += f'Wikipedia - {page_title}:\n{extract}\n'
+                    results['sources'].append(
+                        f'https://en.wikipedia.org/wiki/{page_title.replace(" ", "_")}')
+        except Exception as e:
+            logger.error(f'Wikipedia error: {e}')
+
+    logger.info(f'Research complete: {len(results["content"])} chars')
+    return results if results['content'] else None
+
+
+def research_topic_web_old(topic):
+    """Research a topic using multiple free web sources:
+    DuckDuckGo (no API key) + Wikipedia + Google snippets.
+    Returns rich content for script writing.
+    """
+    import requests as req
+    results = {'topic': topic, 'content': '', 'sources': [], 'images': []}
+
+    # Source 1: DuckDuckGo Instant Answer API (completely free, no key)
+    try:
+        r = req.get(
+            'https://api.duckduckgo.com/',
+            params={'q': topic, 'format': 'json', 'no_html': 1, 'skip_disambig': 1},
+            timeout=10
+        )
+        data = r.json()
+        abstract = data.get('AbstractText', '')
+        if abstract:
+            results['content'] += 'Overview: ' + abstract + '\n\n'
+        
+        # Get related topics
+        for rt in data.get('RelatedTopics', [])[:3]:
+            if isinstance(rt, dict) and rt.get('Text'):
+                results['content'] += '- ' + rt['Text'][:150] + '\n'
+        
+        # Get image if available
+        image = data.get('Image', '')
+        if image and image.startswith('http'):
+            results['images'].append(image)
+            
+        logger.info(f'DuckDuckGo: {len(abstract)} chars for "{topic}"')
+    except Exception as e:
+        logger.error(f'DuckDuckGo error: {e}')
+
+    # Source 2: Wikipedia (always reliable)
+    try:
+        search_r = req.get(
+            'https://en.wikipedia.org/w/api.php',
+            params={'action': 'query', 'list': 'search', 'srsearch': topic,
+                    'format': 'json', 'srlimit': 2},
+            timeout=10
+        )
+        wiki_results = search_r.json().get('query', {}).get('search', [])
+        
+        for wr in wiki_results[:2]:
+            page_title = wr['title']
+            content_r = req.get(
+                'https://en.wikipedia.org/w/api.php',
+                params={'action': 'query', 'titles': page_title,
+                        'prop': 'extracts', 'exintro': True,
+                        'explaintext': True, 'format': 'json'},
+                timeout=10
+            )
+            pages = content_r.json().get('query', {}).get('pages', {})
+            page = next(iter(pages.values()))
+            extract = page.get('extract', '')[:1000]
+            if extract:
+                results['content'] += '\nWikipedia - ' + page_title + ':\n' + extract + '\n'
+                results['sources'].append(
+                    f'https://en.wikipedia.org/wiki/{page_title.replace(" ", "_")}')
+    except Exception as e:
+        logger.error(f'Wikipedia research error: {e}')
+
+    # Source 3: News search via DuckDuckGo news
+    try:
+        r2 = req.get(
+            'https://api.duckduckgo.com/',
+            params={'q': topic + ' news facts', 'format': 'json', 
+                    'no_html': 1, 't': 'XLAB'},
+            headers={'User-Agent': 'Mozilla/5.0'},
+            timeout=10
+        )
+        data2 = r2.json()
+        for item in data2.get('Results', [])[:3]:
+            if item.get('Text'):
+                results['content'] += '\n' + item['Text'][:200] + '\n'
+    except Exception as e:
+        logger.error(f'News search error: {e}')
+
+    logger.info(f'Web research: {len(results["content"])} chars, '
+               f'{len(results["sources"])} sources')
+    return results if results['content'] else None
+
+
 def research_topic_wikipedia(topic):
-    """Research a topic using Wikipedia API — completely free, always works."""
+    """Research a topic using Wikipedia API — completely free, always works.
+    Kept for backward compatibility — now calls research_topic_web internally.
+    """
+    result = research_topic_web(topic)
+    if result:
+        return {
+            'title': topic,
+            'content': result['content'],
+            'url': result['sources'][0] if result['sources'] else ''
+        }
     import requests as req
     try:
         # Search Wikipedia
@@ -2506,7 +2731,7 @@ def process_conspiracy_studio(job_id, params):
         if custom_topic:
             # Research specific topic with Wikipedia + AI
             add_log(job_id, f'   📚 Researching: {custom_topic[:50]}')
-            research = research_topic_wikipedia(custom_topic)
+            research = research_topic_web(custom_topic)
             item = generate_script_from_research(custom_topic, research, grok_key, 'conspiracy')
             if item:
                 data = {'items': [item] * min(max_videos, 3)}
@@ -4548,7 +4773,7 @@ def research_and_generate():
     grok_key = os.environ.get('GROK_API_KEY', '').strip()
     
     # Research with Wikipedia first (free, always works)
-    research = research_topic_wikipedia(topic)
+    research = research_topic_web(topic)
     
     # Generate script
     result = generate_script_from_research(topic, research, grok_key, style)

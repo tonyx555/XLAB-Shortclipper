@@ -5961,6 +5961,39 @@ def download_mp4(job_id):
 @app.route('/api/jobs/<job_id>/download', methods=['GET'])
 def download_zip(job_id):
     job = get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    # Accept done or any status where file exists
+    zip_path = job.get('zip_path', '')
+    mp4_path = job.get('mp4_path', '')
+    
+    # Try ZIP first
+    if zip_path and os.path.exists(zip_path):
+        return send_file(zip_path, as_attachment=True,
+                        download_name=f'xlab_shorts_{job_id[:8]}.zip')
+    
+    # Try MP4 directly
+    if mp4_path and os.path.exists(mp4_path):
+        return send_file(mp4_path, mimetype='video/mp4', as_attachment=True,
+                        download_name=f'xlab_{job_id[:8]}.mp4')
+    
+    # Search work dirs
+    work_dirs = [f'/tmp/conspiracy_{job_id}', f'/tmp/universal_{job_id}',
+                 f'/tmp/ainews_{job_id}', f'/tmp/studio_{job_id}']
+    for d in work_dirs:
+        if os.path.exists(d):
+            # Find largest MP4
+            mp4s = [(os.path.getsize(os.path.join(d,f)), os.path.join(d,f)) 
+                    for f in os.listdir(d) if f.endswith('.mp4')]
+            if mp4s:
+                _, best = sorted(mp4s, reverse=True)[0]
+                return send_file(best, mimetype='video/mp4', as_attachment=True,
+                                download_name=f'xlab_{job_id[:8]}.mp4')
+    
+    return jsonify({'error': 'File not found — try again in a few seconds'}), 404
+
+
     if not job or job.get('status') != 'done':
         return jsonify({'error': 'Not ready'}), 404
     zip_path = job.get('zip_path')

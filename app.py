@@ -2464,7 +2464,12 @@ def smart_fetch_visuals(item, work_dir, idx):
             start = max(0, dur * 0.1)
             cut_path = f'{work_dir}/cut_archive_{idx}.mp4'
             cut_vertical(result, start, 30, cut_path, is_vertical(result))
-            if os.path.exists(cut_path) and os.path.getsize(cut_path) > 100000:
+            # Apply smart crop
+            smart_path = f'{work_dir}/smart_archive_{idx}.mp4'
+            src = cut_path if os.path.exists(cut_path) else result
+            if smart_crop_vertical(src, smart_path):
+                return smart_path, 'archive'
+            elif os.path.exists(cut_path) and os.path.getsize(cut_path) > 100000:
                 return cut_path, 'archive'
         except:
             return result, 'archive'
@@ -2682,6 +2687,103 @@ def build_ai_news_short(job_id, item, work_dir, idx, grok_key, avatar_path=None)
     return None
 
 
+def replace_clip_audio(video_path, text, output_path, style='conspiracy'):
+    """Replace audio on a character clip with Groq Orpheus TTS.
+    Keeps the lip sync video, replaces the original audio with AI voice.
+    """
+    import tempfile
+    work_dir = tempfile.mkdtemp()
+    
+    try:
+        # Generate new audio with Groq Orpheus
+        audio_path = os.path.join(work_dir, 'new_audio.wav')
+        
+        # Add dramatic style for conspiracy
+        if style == 'conspiracy':
+            styled_text = f'[dramatic] {text}'
+        else:
+            styled_text = text
+        
+        groq_key = os.environ.get('GROQ_API_KEY', '').strip()
+        audio_generated = False
+        
+        if groq_key:
+            audio_generated = groq_tts(styled_text, audio_path, groq_key, voice='zeus')
+        
+        if not audio_generated:
+            # Fall back to gTTS
+            try:
+                from gtts import gTTS
+                mp3_path = audio_path.replace('.wav', '.mp3')
+                tts = gTTS(text=text, lang='en', slow=False)
+                tts.save(mp3_path)
+                audio_path = mp3_path
+                audio_generated = os.path.exists(audio_path)
+            except Exception as e:
+                logger.error(f'gTTS error: {e}')
+        
+        if not audio_generated:
+            # No audio — just copy video as is
+            import shutil
+            shutil.copy2(video_path, output_path)
+            return True
+        
+        # Get video duration
+        vid_dur = get_duration(video_path)
+        aud_dur = get_duration(audio_path)
+        
+        # Replace audio — trim/pad audio to match video length
+        result = subprocess.run([
+            'ffmpeg', '-i', video_path, '-i', audio_path,
+            '-filter_complex',
+            f'[1:a]atrim=0:{vid_dur},apad=whole_dur={vid_dur}[aout]',
+            '-map', '0:v', '-map', '[aout]',
+            '-c:v', 'copy',
+            '-c:a', 'aac', '-b:a', '128k',
+            '-shortest', '-y', output_path, '-loglevel', 'quiet'
+        ], capture_output=True, timeout=60)
+        
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+            logger.info(f'Audio replaced successfully')
+            return True
+        
+        # Fallback — just use original
+        import shutil
+        shutil.copy2(video_path, output_path)
+        return True
+        
+    except Exception as e:
+        logger.error(f'Replace audio error: {e}')
+        import shutil
+        shutil.copy2(video_path, output_path)
+        return True
+
+
+def get_character_clip(clip_type='hook'):
+    """Get a pre-generated character clip from library.
+    Types: hook, cta, walk, point, general
+    Returns path to clip or None if not available.
+    """
+    clips_dir = '/tmp/xlab_character_clips'
+    if not os.path.exists(clips_dir):
+        return None
+    
+    # Try to find clip matching type
+    import random
+    matching = [f for f in os.listdir(clips_dir) 
+                if f.endswith('.mp4') and clip_type in f]
+    if not matching:
+        # Fall back to any clip
+        all_clips = [f for f in os.listdir(clips_dir) if f.endswith('.mp4')]
+        if all_clips:
+            matching = all_clips
+    
+    if matching:
+        chosen = random.choice(matching)
+        return os.path.join(clips_dir, chosen)
+    return None
+
+
 def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path=None):
     """Build viral conspiracy Short with mysterious character format:
     - Character appears (no face shown = mystery)
@@ -2770,26 +2872,136 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
             clips.append(demo_path)
             add_log(job_id, f'   ⚠️ Footage processing: {str(e)[:40]}')
 
-    # ── Part 4: Character CTA (3s) ────────────────────────────
+    # ── Part 3b: Walk + opens suitcase — mid reveal ──────────
+    try:
+        walk_clip = f'{work_dir}/p3b_walk_{idx}.mp4'
+        mid_facts = key_facts[0] if key_facts else 'Here is what they hide from you'
+        walk_voice = f"[dramatic] {mid_facts}"
+        if prep_char_clip('walk', walk_voice, walk_clip):
+            clips.append(walk_clip)
+            add_log(job_id, f'   ✅ Walk/reveal clip ready')
+    except Exception as e:
+        add_log(job_id, f'   ⚠️ Walk clip error: {str(e)[:40]}')
+
+    # ── Part 3c: Close up with footage fading behind him ──────
+    try:
+        closeup_clip = f'{work_dir}/p3c_close_{idx}.mp4'
+        # Voice reacts to what was just shown
+        close_voice = f"[dramatic] Now you know what they've been hiding. Follow if you want the truth every day."
+        if prep_char_clip('general', close_voice, closeup_clip, fallback_dur=6):
+            # If we have footage, create PIP fade-out at start of close up
+            if demo_path and os.path.exists(demo_path) and os.path.exists(closeup_clip):
+                try:
+                    pip_fadeout = f'{work_dir}/p3c_pip_{idx}.mp4'
+                    close_dur = get_duration(closeup_clip)
+                    foot_dur = get_duration(demo_path)
+                    # Show footage for first 3s fading out, then character alone
+                    box_w, box_h = 980, 551
+                    box_x, box_y = 50, 684
+                    result = subprocess.run([
+                        'ffmpeg',
+                        '-i', closeup_clip,
+                        '-i', demo_path,
+                        '-filter_complex',
+                        (
+                            '[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setpts=PTS-STARTPTS[bg];'
+                            f'[1:v]scale={box_w}:{box_h}:force_original_aspect_ratio=increase,crop={box_w}:{box_h},setpts=PTS-STARTPTS,fade=t=out:st=2:d=1.5[box];'
+                            f'[bg][box]overlay={box_x}:{box_y}:enable=\'lte(t,3.5)\''
+                        ),
+                        '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                        '-map', '0:a?',
+                        '-c:a', 'aac', '-b:a', '128k',
+                        '-t', str(close_dur),
+                        '-movflags', '+faststart',
+                        '-pix_fmt', 'yuv420p',
+                        '-y', pip_fadeout, '-loglevel', 'quiet'
+                    ], capture_output=True, timeout=60)
+                    if os.path.exists(pip_fadeout) and os.path.getsize(pip_fadeout) > 50000:
+                        clips.append(pip_fadeout)
+                        add_log(job_id, f'   ✅ Close up with footage fade ready')
+                    else:
+                        clips.append(closeup_clip)
+                        add_log(job_id, f'   ✅ Close up ready')
+                except Exception as e:
+                    clips.append(closeup_clip)
+                    add_log(job_id, f'   ✅ Close up ready')
+            else:
+                clips.append(closeup_clip)
+                add_log(job_id, f'   ✅ Close up ready')
+    except Exception as e:
+        add_log(job_id, f'   ⚠️ Close up error: {str(e)[:40]}')
+
+    # ── Part 4: Window writing CTA (5s) ──────────────────────
     try:
         cta_card = f'{work_dir}/cta_{idx}.mp4'
-        if character_path and os.path.exists(character_path):
+        # Title to write on window — short version
+        window_text = title[:35].upper().replace("'","").replace('"','').replace(':','')
+        
+        lib_cta = get_character_clip('cta')
+        if lib_cta:
+            import shutil as _sh2
+            # Replace audio with CTA voice first
+            raw_cta = f'{work_dir}/cta_raw_{idx}.mp4'
+            cta_voice_text = f'Follow for more hidden truths. New video every day.'
+            replace_clip_audio(lib_cta, cta_voice_text, raw_cta, 'conspiracy')
+            if not os.path.exists(raw_cta):
+                _sh2.copy2(lib_cta, raw_cta)
+            # Add handwriting-style text overlay on window clip
+            dur_cta = get_duration(raw_cta)
+            subprocess.run([
+                'ffmpeg', '-i', raw_cta,
+                '-vf', (
+                    # Title appears letter by letter effect
+                    f"drawtext=text='{window_text}':fontsize=46:fontcolor=white@0.9:"
+                    f"x=(w-text_w)/2:y=h*0.35:fontweight=bold:"
+                    f"shadowx=3:shadowy=3:shadowcolor=black@0.8,"
+                    # Follow text at bottom
+                    f"drawtext=text='FOLLOW IF YOU WANT THE TRUTH':"
+                    f"fontsize=32:fontcolor=#ff6b5b:fontweight=bold:"
+                    f"x=(w-text_w)/2:y=h*0.82:"
+                    f"box=1:boxcolor=black@0.5:boxborderw=8:"
+                    f"enable='gte(t,2)'"
+                ),
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                '-c:a', 'copy', '-y', cta_card, '-loglevel', 'quiet'
+            ], capture_output=True, timeout=30)
+            if not os.path.exists(cta_card):
+                _sh2.copy2(raw_cta, cta_card)
+            add_log(job_id, f'   ✅ Window writing CTA ready')
+
+        elif character_path and os.path.exists(character_path):
+            # Use still photo with window text effect
             subprocess.run([
                 'ffmpeg', '-loop', '1', '-i', character_path,
-                '-vf', (f'scale=1080:1920:force_original_aspect_ratio=increase,'
-                       f'crop=1080:1920,'
-                       f"drawtext=text='FOLLOW IF YOU WANT THE TRUTH':fontsize=40:"
-                       f"fontcolor=white:x=(w-text_w)/2:y=h*0.85:fontweight=bold:"
-                       f"box=1:boxcolor=black@0.6:boxborderw=12"),
-                '-t', '3', '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                '-vf', (
+                    f'scale=1080:1920:force_original_aspect_ratio=increase,'
+                    f'crop=1080:1920,'
+                    f"drawtext=text='{window_text}':fontsize=46:fontcolor=white@0.9:"
+                    f"x=(w-text_w)/2:y=h*0.35:fontweight=bold:"
+                    f"shadowx=3:shadowy=3:shadowcolor=black@0.8,"
+                    f"drawtext=text='FOLLOW IF YOU WANT THE TRUTH':"
+                    f"fontsize=32:fontcolor=#ff6b5b:fontweight=bold:"
+                    f"x=(w-text_w)/2:y=h*0.82:"
+                    f"box=1:boxcolor=black@0.5:boxborderw=8:"
+                    f"enable='gte(t,2)'"
+                ),
+                '-t', '5', '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
                 '-pix_fmt', 'yuv420p', '-y', cta_card, '-loglevel', 'quiet'
             ], capture_output=True, timeout=30)
         else:
+            # Pure text window effect on dark background
             subprocess.run([
                 'ffmpeg', '-f', 'lavfi',
-                '-i', 'color=c=black:size=1080x1920:duration=3:rate=30',
-                '-vf', ("drawtext=text='FOLLOW IF YOU WANT THE TRUTH':fontsize=44:"
-                       "fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2:fontweight=bold"),
+                '-i', 'color=c=#0a0a0f:size=1080x1920:duration=5:rate=30',
+                '-vf', (
+                    f"drawtext=text='{window_text}':fontsize=52:fontcolor=white@0.9:"
+                    f"x=(w-text_w)/2:y=h*0.38:fontweight=bold:"
+                    f"shadowx=4:shadowy=4:shadowcolor=black,"
+                    f"drawtext=text='FOLLOW IF YOU WANT THE TRUTH':"
+                    f"fontsize=34:fontcolor=#ff6b5b:fontweight=bold:"
+                    f"x=(w-text_w)/2:y=h*0.82:"
+                    f"enable='gte(t,2)'"
+                ),
                 '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
                 '-pix_fmt', 'yuv420p', '-y', cta_card, '-loglevel', 'quiet'
             ], capture_output=True, timeout=20)
@@ -2904,33 +3116,22 @@ def process_conspiracy_studio(job_id, params):
             add_log(job_id, f'\n📱 Story {idx+1}: {item["title"][:50]}')
             update_job(job_id, {'progress': 10 + int((idx/len(items))*75)})
 
-            # Find B-roll footage
-            add_log(job_id, f'   🎬 Finding footage...')
-            clip_path, source = fetch_best_visuals(item, work_dir, idx)
+            # Use build_conspiracy_short — includes character intro + footage + CTA
+            character_path = '/tmp/xlab_character.jpg'
+            if not os.path.exists(character_path):
+                character_path = '/tmp/xlab_avatar.jpg'
+            if not os.path.exists(character_path):
+                character_path = None
 
-            if not clip_path:
-                add_log(job_id, f'   ⚠️ No footage - skipping')
+            final_path = build_conspiracy_short(
+                job_id, item, work_dir, idx, grok_key,
+                character_path
+            )
+
+            if not final_path:
+                add_log(job_id, f'   ❌ Failed - skipping')
                 continue
 
-            # Add Grok narration
-            add_log(job_id, f'   🎙️ Adding narration...')
-            tts_path = f'{work_dir}/narr_{idx}.mp3'
-            if text_to_speech(item.get('script', item['hook']), tts_path):
-                narr_out = f'{work_dir}/narrated_{idx}.mp4'
-                if overlay_narration(clip_path, tts_path, narr_out):
-                    clip_path = narr_out
-
-            # Add viral text overlays
-            add_log(job_id, f'   📝 Adding bold text overlays...')
-            overlay_out = f'{work_dir}/overlay_{idx}.mp4'
-            key_facts = item.get('key_facts', [])[:3]
-            if add_text_overlays(clip_path, overlay_out,
-                                item['title'], item['hook'],
-                                key_facts, 'FOLLOW FOR MORE 👀'):
-                clip_path = overlay_out
-
-            # Save final
-            final_path = f'{work_dir}/conspiracy_{idx}_{job_id[:6]}.mp4'
             import shutil as _sh
             _sh.copy2(clip_path, final_path)
             save_to_library(final_path, item['title'], 'conspiracy', 'conspiracy', job_id)
@@ -3719,6 +3920,10 @@ def download_via_rapidapi(video_url, output_dir, video_id):
         # Get best video stream
         videos = data.get('videos', {}).get('items', [])
         logger.info(f'RapidAPI videos found: {len(videos)}')
+        
+        # Also check top-level video field from test endpoint format
+        if not videos and data.get('first_video'):
+            videos = [data['first_video']]
         if not videos:
             # Try alternative response structure
             videos = data.get('streamingData', {}).get('formats', [])
@@ -5055,6 +5260,64 @@ def research_and_generate():
     logger.info(f'Research complete: {debug}')
     result['debug'] = debug
     return jsonify({'success': True, 'item': result})
+
+
+@app.route('/api/character-clips', methods=['GET'])
+def get_character_clips():
+    """List all saved character clips."""
+    clips_dir = '/tmp/xlab_character_clips'
+    os.makedirs(clips_dir, exist_ok=True)
+    clips = []
+    for f in os.listdir(clips_dir):
+        if f.endswith('.mp4'):
+            path = os.path.join(clips_dir, f)
+            clips.append({
+                'name': f.replace('.mp4','').replace('_',' ').title(),
+                'filename': f,
+                'size_mb': round(os.path.getsize(path)/1024/1024, 1)
+            })
+    return jsonify({'clips': clips})
+
+
+@app.route('/api/character-clips/upload', methods=['POST'])
+def upload_character_clip():
+    """Upload a pre-generated character clip."""
+    import base64
+    data = request.json or {}
+    clip_data = data.get('clip_data', '')
+    clip_name = data.get('name', 'character_clip').replace(' ','_').lower()
+    clip_type = data.get('type', 'general')  # hook, cta, walk, point
+    
+    if not clip_data:
+        return jsonify({'error': 'No clip data'})
+    try:
+        if ',' in clip_data:
+            clip_data = clip_data.split(',')[1]
+        clips_dir = '/tmp/xlab_character_clips'
+        os.makedirs(clips_dir, exist_ok=True)
+        clip_path = os.path.join(clips_dir, f'{clip_type}_{clip_name}.mp4')
+        with open(clip_path, 'wb') as f:
+            f.write(base64.b64decode(clip_data))
+        size = os.path.getsize(clip_path)
+        # Normalize to standard format
+        norm_path = clip_path.replace('.mp4', '_norm.mp4')
+        if normalize_clip(clip_path, norm_path):
+            os.replace(norm_path, clip_path)
+        return jsonify({'success': True, 'filename': os.path.basename(clip_path),
+                       'size_mb': round(size/1024/1024, 1)})
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
+
+@app.route('/api/character-clips/delete', methods=['POST'])
+def delete_character_clip():
+    data = request.json or {}
+    filename = data.get('filename', '')
+    path = f'/tmp/xlab_character_clips/{filename}'
+    if os.path.exists(path):
+        os.remove(path)
+        return jsonify({'success': True})
+    return jsonify({'error': 'Not found'})
 
 
 @app.route('/api/save-character', methods=['POST'])

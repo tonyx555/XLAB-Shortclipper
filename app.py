@@ -2329,20 +2329,41 @@ def get_affiliate_info(tool_name):
 
 
 def add_crossfade_transition(clip1, clip2, output, duration=0.5):
-    """Add smooth crossfade between two clips."""
+    """Add smooth crossfade between two clips — preserves audio."""
     try:
+        # Get durations
+        dur1 = get_duration(clip1)
+        offset = max(0, dur1 - duration)
+        
         result = subprocess.run([
             'ffmpeg',
             '-i', clip1, '-i', clip2,
             '-filter_complex',
-            f'[0:v][1:v]xfade=transition=fade:duration={duration}:offset=0[v];'
-            f'[0:a][1:a]acrossfade=d={duration}[a]',
+            f'[0:v][1:v]xfade=transition=fade:duration={duration}:offset={offset}[v];'
+            f'[0:a]apad[a0];[1:a]apad[a1];[a0][a1]acrossfade=d={duration}[a]',
             '-map', '[v]', '-map', '[a]',
             '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
             '-c:a', 'aac', '-b:a', '128k',
             '-movflags', '+faststart',
             '-y', output, '-loglevel', 'quiet'
         ], capture_output=True, timeout=60)
+        
+        if os.path.exists(output) and os.path.getsize(output) > 50000:
+            return True
+        
+        # Fallback — simple concat without fade but keep audio
+        concat_file = output + '_concat.txt'
+        with open(concat_file, 'w') as f:
+            f.write(f"file '{clip1}'\nfile '{clip2}'\n")
+        subprocess.run([
+            'ffmpeg', '-f', 'concat', '-safe', '0', '-i', concat_file,
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-c:a', 'aac', '-b:a', '128k',
+            '-movflags', '+faststart',
+            '-y', output, '-loglevel', 'quiet'
+        ], capture_output=True, timeout=60)
+        if os.path.exists(concat_file):
+            os.remove(concat_file)
         return os.path.exists(output) and os.path.getsize(output) > 50000
     except Exception as e:
         logger.error(f'Crossfade error: {e}')
@@ -2788,6 +2809,41 @@ def get_character_clip(clip_type='hook'):
     return None
 
 
+def create_pip_effect(character_clip, footage_clip, output_path):
+    """Character loops blurred in background, footage plays in center box.
+    Character loops to match full footage duration.
+    """
+    try:
+        foot_dur = min(get_duration(footage_clip), 25)
+        box_w, box_h = 980, 551
+        box_x, box_y = 50, 684
+
+        result = subprocess.run([
+            'ffmpeg',
+            '-stream_loop', '-1', '-i', character_clip,
+            '-i', footage_clip,
+            '-filter_complex', (
+                f'[0:v]scale=1080:1920:force_original_aspect_ratio=increase,'
+                f'crop=1080:1920,gblur=sigma=25[bg];'
+                f'[1:v]scale={box_w}:{box_h}:force_original_aspect_ratio=increase,'
+                f'crop={box_w}:{box_h}[box];'
+                f'[bg][box]overlay={box_x}:{box_y}[v]'
+            ),
+            '-map', '[v]', '-map', '1:a?',
+            '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+            '-c:a', 'aac', '-b:a', '128k',
+            '-t', str(foot_dur),
+            '-movflags', '+faststart',
+            '-pix_fmt', 'yuv420p',
+            '-y', output_path, '-loglevel', 'quiet'
+        ], capture_output=True, timeout=120)
+
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 100000
+    except Exception as e:
+        logger.error(f'PIP error: {e}')
+        return False
+
+
 def prep_char_clip(clip_type, voice_text, out_path, character_path=None, fallback_dur=4):
     """Get character clip from library, replace audio, normalize.
     Standalone function accessible by all builders.
@@ -2893,9 +2949,21 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
                     if os.path.exists(narrated):
                         demo_path = narrated
                         add_log(job_id, f'   ✅ Narration added')
-            if add_text_overlays(demo_path, overlay_out, title, hook, facts_to_show, ''):
-                demo_path = overlay_out
+            # If landscape — loop character behind footage
+            if not is_vertical(demo_path):
+                walk_lib = get_character_clip('walk') or get_character_clip('hook')
+                if walk_lib:
+                    add_log(job_id, f'   🎬 Character looping behind footage...')
+                    pip_out = f'{work_dir}/pip_{idx}.mp4'
+                    if create_pip_effect(walk_lib, demo_path, pip_out):
+                        demo_path = pip_out
+                        add_log(job_id, f'   ✅ Character loops behind footage')
 
+            # Text overlays
+            overlay_out = f'{work_dir}/overlay_{idx}.mp4'
+            facts_to_show = (overlays or key_facts)[:3]
+            if add_text_overlays(demo_path, overlay_out, title, hook, facts_to_show, ''):
+                if os.path.exists(overlay_out): demo_path = overlay_out
             clips.append(demo_path)
             add_log(job_id, f'   ✅ Footage ready - {source}')
         except Exception as e:

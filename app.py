@@ -2519,37 +2519,44 @@ def fetch_wikipedia_images(topic, work_dir, idx):
 
 
 def generate_better_search_query(topic, style='conspiracy'):
-    """Generate specific search queries for footage based on topic and style."""
-    base = ' '.join(topic.lower().replace('nobody talks about','').strip().split()[:4])
+    """Generate simple effective search queries — short and direct works best."""
+    # Clean topic — remove hook words, keep core subject
+    base = topic.lower()
+    for remove in ['nobody talks about', 'they hide', 'secret', 'hidden', 'exposed', 
+                   'truth about', 'the truth', 'nobody knows']:
+        base = base.replace(remove, '')
+    base = ' '.join(base.strip().split()[:3])  # max 3 words
+    
     queries = {
         'conspiracy': [
-            base + ' documentary exposed',
-            base + ' surveillance evidence',
-            base + ' hidden truth revealed',
+            base,                          # simplest first
+            base + ' documentary',
+            base + ' explained',
             base + ' investigation',
         ],
         'ai_tools': [
-            base + ' demo tutorial',
-            base + ' how to use 2025',
-            base + ' review walkthrough',
+            base + ' tutorial',
+            base + ' demo',
+            base + ' how to use',
+            base,
         ],
         'ai_news': [
-            base + ' demo tutorial',
-            base + ' how to use 2025',
-            base + ' review',
+            base + ' tutorial',
+            base + ' demo 2025',
+            base,
         ],
         'history': [
-            base + ' historical documentary',
-            base + ' history explained',
-            base + ' archive footage',
+            base + ' documentary',
+            base + ' history',
+            base,
         ],
         'finance': [
-            base + ' explained documentary',
-            base + ' financial truth',
-            base + ' money secret revealed',
+            base + ' explained',
+            base + ' documentary',
+            base,
         ],
     }
-    return queries.get(style, [base + ' documentary', base + ' explained'])
+    return queries.get(style, [base, base + ' documentary', base + ' explained'])
 
 
 def smart_fetch_visuals(item, work_dir, idx):
@@ -5505,74 +5512,20 @@ def research_search():
             items.append({'title': 'No RAPIDAPI_KEY set in Railway', 'url': '', 'meta': 'Add RAPIDAPI_KEY to Railway variables'})
         else:
             # Try multiple search endpoints
-            search_endpoints = [
-                {
-                    'url': 'https://youtube-media-downloader.p.rapidapi.com/v2/search/videos',
-                    'host': 'youtube-media-downloader.p.rapidapi.com',
-                    'params': {'query': query, 'hl': 'en', 'gl': 'US'},
-                    'items_key': 'items'
-                },
-                {
-                    'url': 'https://yt-api.p.rapidapi.com/search',
-                    'host': 'yt-api.p.rapidapi.com',
-                    'params': {'query': query, 'hl': 'en', 'gl': 'US'},
-                    'items_key': 'data'
-                },
-                {
-                    'url': 'https://youtube-search-and-download.p.rapidapi.com/search',
-                    'host': 'youtube-search-and-download.p.rapidapi.com',
-                    'params': {'query': query, 'hl': 'en'},
-                    'items_key': 'contents'
-                }
-            ]
-            
-            for ep in search_endpoints:
-                try:
-                    r = req.get(
-                        ep['url'],
-                        params=ep['params'],
-                        headers={
-                            'x-rapidapi-key': api_key,
-                            'x-rapidapi-host': ep['host']
-                        },
-                        timeout=15
-                    )
-                    data_r = r.json()
-                    logger.info(f'YouTube search via {ep["host"]}: status={r.status_code} keys={list(data_r.keys())[:5]}')
-                    
-                    vids = data_r.get(ep['items_key'], [])
-                    if not vids and r.status_code == 200:
-                        # Try other common keys
-                        for k in ['items', 'data', 'results', 'videos', 'contents']:
-                            if data_r.get(k):
-                                vids = data_r[k]
-                                break
-                    
-                    if vids:
-                        for v in vids[:8]:
-                            # Handle different response formats
-                            vid_id = v.get('id') or v.get('videoId') or (v.get('video', {}) or {}).get('videoId', '')
-                            title = v.get('title') or (v.get('video', {}) or {}).get('title', '')
-                            thumbs = v.get('thumbnails', []) or v.get('thumbnail', [])
-                            thumb = ''
-                            if thumbs:
-                                t = thumbs[0] if isinstance(thumbs, list) else thumbs
-                                thumb = t.get('url', '') if isinstance(t, dict) else ''
-                            
-                            if vid_id and title:
-                                items.append({
-                                    'title': str(title)[:60],
-                                    'url': f'https://youtube.com/watch?v={vid_id}',
-                                    'thumbnail': thumb,
-                                    'meta': v.get('publishedTimeText', '') or v.get('publishedTime', '')
-                                })
-                        
-                        if items:
-                            break  # Got results, stop trying endpoints
-                            
-                except Exception as e:
-                    logger.error(f'YouTube search error ({ep["host"]}): {e}')
-                    continue
+            # Use search_youtube_rapidapi — the one that already works
+            vids = search_youtube_rapidapi(query, api_key, max_results=8)
+            for v in vids:
+                vid_id = v.get('id', '')
+                title = v.get('title', '')
+                thumbs = v.get('thumbnails', [])
+                thumb = thumbs[0].get('url','') if thumbs and isinstance(thumbs[0],dict) else ''
+                if vid_id:
+                    items.append({
+                        'title': title[:60],
+                        'url': f'https://youtube.com/watch?v={vid_id}',
+                        'thumbnail': thumb,
+                        'meta': v.get('publishedTimeText','') + ' · ' + v.get('viewCountText','')
+                    })
 
     elif search_type == 'x':
         # X/Twitter search

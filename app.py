@@ -2575,21 +2575,31 @@ def smart_fetch_visuals(item, work_dir, idx):
         rapidapi_key = os.environ.get('RAPIDAPI_KEY', '')
         if rapidapi_key:
             dl_path = download_via_rapidapi(manual_url, work_dir, f'manual_{idx}')
+            logger.info(f'Manual URL download result: {dl_path}')
+            add_log_safe(f'   📹 Download: {"✅" if dl_path else "❌ Failed"}')
             if dl_path:
                 try:
                     dur = get_duration(dl_path)
+                    add_log_safe(f'   📹 Downloaded {dur:.0f}s video — cutting best 25s')
                     start = max(0, dur * 0.1)
                     cut_path = f'{work_dir}/manual_cut_{idx}.mp4'
                     cut_vertical(dl_path, start, 25, cut_path, is_vertical(dl_path))
+                    # If cut failed just use raw download
+                    if not os.path.exists(cut_path) or os.path.getsize(cut_path) < 10000:
+                        add_log_safe(f'   ⚠️ Cut failed — using raw download')
+                        cut_path = dl_path
                     if not is_vertical(cut_path):
                         vert = f'{work_dir}/manual_vert_{idx}.mp4'
                         if smart_crop_vertical(cut_path, vert):
                             cut_path = vert
-                    if os.path.exists(cut_path) and os.path.getsize(cut_path) > 100000:
-                        add_log_safe(f'   ✅ Manual URL clip ready')
-                        return cut_path, 'youtube_manual'
+                    add_log_safe(f'   ✅ Manual URL clip ready')
+                    return cut_path, 'youtube_manual'
                 except Exception as e:
                     logger.error(f'Manual URL error: {e}')
+                    add_log_safe(f'   ⚠️ Processing error: {str(e)[:40]}')
+                    # Still use raw download even if processing fails
+                    if dl_path and os.path.exists(dl_path):
+                        return dl_path, 'youtube_manual'
 
     # 1. YouTube FIRST — most relevant results
     add_log_safe('   📹 Searching YouTube for relevant footage...')

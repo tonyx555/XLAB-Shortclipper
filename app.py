@@ -2569,8 +2569,9 @@ def smart_fetch_visuals(item, work_dir, idx):
 
     # 0. Manual YouTube URL — highest priority if provided
     manual_url = item.get('youtube_url', '').strip()
-    if manual_url and 'youtube' in manual_url:
-        add_log_safe(f'   📹 Using manual YouTube URL...')
+    logger.info(f'smart_fetch_visuals: manual_url={manual_url[:50] if manual_url else "none"}')
+    if manual_url and ('youtube' in manual_url or 'youtu.be' in manual_url):
+        add_log_safe(f'   📹 Using selected YouTube URL...')
         rapidapi_key = os.environ.get('RAPIDAPI_KEY', '')
         if rapidapi_key:
             dl_path = download_via_rapidapi(manual_url, work_dir, f'manual_{idx}')
@@ -3425,6 +3426,8 @@ def process_conspiracy_studio(job_id, params):
         update_job(job_id, {'progress': 5})
 
         youtube_url = params.get('youtube_url', '').strip()
+        if youtube_url:
+            add_log(job_id, f'   📹 Manual YouTube URL: {youtube_url[:50]}')
 
         if custom_topic:
             add_log(job_id, f'   📚 Researching: {custom_topic[:50]}')
@@ -3461,6 +3464,8 @@ def process_conspiracy_studio(job_id, params):
             
             if youtube_url:
                 item['youtube_url'] = youtube_url
+            if youtube_url:
+                item['youtube_url'] = youtube_url
             data = {'items': [item] * min(max_videos, 3)}
             add_log(job_id, f'   ✅ Script ready: {item.get("title","")[:50]}')
         else:
@@ -3468,6 +3473,10 @@ def process_conspiracy_studio(job_id, params):
             data = analyze_viral_blueprint('@conspiracy_peterx', grok_key)
             if not data or not data.get('items'):
                 raise Exception('Could not generate topics')
+            # Add youtube_url to all auto items if provided
+            if youtube_url and data.get('items'):
+                for it in data['items']:
+                    it['youtube_url'] = youtube_url
 
         items = data['items'][:max_videos]
         add_log(job_id, f'✅ Generated {len(items)} topics')
@@ -5513,7 +5522,18 @@ def research_search():
         else:
             # Try multiple search endpoints
             # Use search_youtube_rapidapi — the one that already works
+            logger.info(f'Research calling search_youtube_rapidapi with key={api_key[:8]}... query={query}')
             vids = search_youtube_rapidapi(query, api_key, max_results=8)
+            logger.info(f'Research got {len(vids)} results')
+            
+            if not vids:
+                # Return debug info so we can see what's happening
+                items.append({
+                    'title': f'No results for "{query}" — check Railway logs',
+                    'url': '',
+                    'meta': f'API key starts with: {api_key[:8]}...'
+                })
+            
             for v in vids:
                 vid_id = v.get('id', '')
                 title = v.get('title', '')

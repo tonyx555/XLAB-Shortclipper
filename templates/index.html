@@ -3184,13 +3184,43 @@ async function searchAll() {
   results.innerHTML = '<div style="font-size:11px;color:#555;text-align:center;padding:20px">⏳ Searching...</div>';
 
   try {
-    const r = await fetch('/api/research-search', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({query: q, type: currentResearchTab})
-    });
-    const data = await r.json();
-    renderResearchResults(data, currentResearchTab);
+    if (currentResearchTab === 'yt') {
+      // Use the same working search API as main tab
+      const r = await fetch('/api/search', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mode: 'search', search_query: q, max_videos: 8})
+      });
+      const data = await r.json();
+      const videos = data.videos || [];
+      if (!videos.length) {
+        results.innerHTML = '<div style="font-size:11px;color:#333;text-align:center;padding:20px">No results found</div>';
+        return;
+      }
+      results.innerHTML = videos.map(v => `
+        <div onclick="selectResearchItem('${(v.webpage_url||v.url||'').replace(/'/g,"\'")}', '${(v.title||'').replace(/'/g,"\'").substring(0,40)}')"
+          style="padding:10px;border-bottom:1px solid #0f0f0f;cursor:pointer"
+          onmouseover="this.style.background='#0a0a0a'"
+          onmouseout="this.style.background='transparent'">
+          <div style="display:flex;gap:8px;align-items:center">
+            ${v.thumbnail ? `<img src="${v.thumbnail}" style="width:70px;height:40px;border-radius:4px;object-fit:cover;flex-shrink:0">` : '<div style="width:70px;height:40px;background:#111;border-radius:4px;flex-shrink:0"></div>'}
+            <div>
+              <div style="font-size:11px;color:#e8e8f0;font-weight:600;margin-bottom:2px">${(v.title||'').substring(0,55)}</div>
+              <div style="font-size:10px;color:#555">${v.channel||''} · ${v.duration||''}</div>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    } else {
+      // X and GitHub use research endpoint
+      const r = await fetch('/api/research-search', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({query: q, type: currentResearchTab})
+      });
+      const data = await r.json();
+      renderResearchResults(data, currentResearchTab);
+    }
   } catch(e) {
     results.innerHTML = '<div style="font-size:11px;color:#ff6b5b;text-align:center;padding:20px">Error: ' + e.message + '</div>';
   }

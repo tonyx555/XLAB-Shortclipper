@@ -2571,12 +2571,72 @@ def smart_fetch_visuals(item, work_dir, idx):
     manual_url = item.get('youtube_url', '').strip()
     logger.info(f'smart_fetch_visuals: manual_url={manual_url[:50] if manual_url else "none"}')
     if manual_url and ('youtube' in manual_url or 'youtu.be' in manual_url):
-        add_log_safe(f'   📹 Using selected YouTube URL...')
-        rapidapi_key = os.environ.get('RAPIDAPI_KEY', '')
-        if rapidapi_key:
-            dl_path = download_via_rapidapi(manual_url, work_dir, f'manual_{idx}')
-            logger.info(f'Manual URL download result: {dl_path}')
-            add_log_safe(f'   📹 Download: {"✅" if dl_path else "❌ Failed"}')
+        add_log_safe(f'   📹 Downloading selected video...')
+        dl_path = None
+        
+        # Try yt-dlp with proxy FIRST (most reliable, free)
+        proxy = os.environ.get('PROXY_URL', '')
+        try:
+            import re as _re
+            m = _re.search(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})', manual_url)
+            vid_id = m.group(1) if m else 'unknown'
+            out_path = os.path.join(work_dir, f'ytdlp_manual_{idx}.mp4')
+            cmd = [
+                'yt-dlp',
+                '--no-playlist', '--no-warnings',
+                '-f', 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
+                '--merge-output-format', 'mp4',
+                '-o', out_path,
+                manual_url
+            ]
+            if proxy:
+                cmd += ['--proxy', proxy]
+            r = subprocess.run(cmd, capture_output=True, timeout=120)
+            if os.path.exists(out_path) and os.path.getsize(out_path) > 100000:
+                dl_path = out_path
+                add_log_safe(f'   ✅ yt-dlp download success')
+            else:
+                logger.warning(f'yt-dlp failed: {r.stderr[:100]}')
+        except Exception as e:
+            logger.error(f'yt-dlp error: {e}')
+        
+        # Fallback chain — try everything
+        if not dl_path:
+            rapidapi_key = os.environ.get('RAPIDAPI_KEY', '')
+            if rapidapi_key:
+                dl_path = download_via_rapidapi(manual_url, work_dir, f'manual_{idx}')
+                if dl_path: add_log_safe(f'   ✅ RapidAPI download success')
+
+        if not dl_path:
+            add_log_safe(f'   🔄 Trying cobalt.tools...')
+            dl_path = download_via_cobalt(manual_url, work_dir, f'manual_{idx}', None)
+
+        if not dl_path:
+            add_log_safe(f'   🔄 Trying Piped...')
+            dl_path = download_via_piped(manual_url, work_dir, f'manual_{idx}')
+
+        if not dl_path:
+            add_log_safe(f'   🔄 Trying Invidious...')
+            dl_path = download_via_invidious(manual_url, work_dir, f'manual_{idx}')
+
+        if not dl_path:
+            # Last resort — yt-dlp without proxy
+            add_log_safe(f'   🔄 Trying direct yt-dlp...')
+            try:
+                out_path = os.path.join(work_dir, f'ytdlp_direct_{idx}.mp4')
+                r = subprocess.run([
+                    'yt-dlp', '--no-playlist', '--no-warnings',
+                    '-f', 'worst[ext=mp4]/worst',  # smallest file
+                    '-o', out_path, manual_url
+                ], capture_output=True, timeout=120)
+                if os.path.exists(out_path) and os.path.getsize(out_path) > 100000:
+                    dl_path = out_path
+                    add_log_safe(f'   ✅ Direct yt-dlp success')
+            except Exception as e:
+                logger.error(f'Direct yt-dlp error: {e}')
+
+        if not dl_path:
+            add_log_safe(f'   ❌ All download methods failed — using character loop')
             if dl_path:
                 add_log_safe(f'   ✅ Downloaded! Processing...')
                 try:

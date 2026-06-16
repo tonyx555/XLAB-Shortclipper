@@ -3895,59 +3895,67 @@ def process_grok_original_video(job_id, params):
 
 
 def text_to_speech(text, output_path, style='normal'):
-    """Convert text to speech — tries multiple engines in order."""
-    groq_key = os.environ.get('GROQ_API_KEY', '').strip()
+    """Convert text to speech.
+    Priority: ElevenLabs (primary) → Groq Orpheus → gTTS
+    Always narrates FULL script, not just 500 chars.
+    """
+    import requests as req
+
     elevenlabs_key = os.environ.get('ELEVENLABS_API_KEY', '').strip()
+    groq_key = os.environ.get('GROQ_API_KEY', '').strip()
 
-    # Young masculine voice — atlas sounds like confident 25yo
-    if style == 'conspiracy' and groq_key:
-        styled = f'[deep] {text}'
-    elif groq_key:
-        styled = text
-    else:
-        styled = text
+    # Use full text — up to 2000 chars
+    narration = text.strip()[:2000]
+    logger.info(f'TTS ({len(narration)} chars): {narration[:100]}')
 
-    # 1. Groq Orpheus — best, free
-    if groq_key:
-        try:
-            wav_path = output_path.replace('.mp3', '.wav')
-            if groq_tts(styled, wav_path, groq_key, voice='atlas'):
-                result = subprocess.run([
-                    'ffmpeg', '-i', wav_path, '-acodec', 'libmp3lame',
-                    '-q:a', '2', '-y', output_path, '-loglevel', 'quiet'
-                ], capture_output=True, timeout=30)
-                if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
-                    logger.info('✅ Groq Orpheus TTS')
-                    return True
-            logger.warning('Groq TTS failed — trying next')
-        except Exception as e:
-            logger.error(f'Groq TTS error: {e}')
-
-    # 2. ElevenLabs — great quality, 10k chars/month free
+    # 1. ElevenLabs — PRIMARY, best human voice
     if elevenlabs_key:
         try:
-            import requests as req
             r = req.post(
                 'https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpgDQGcFmaJgB',
                 headers={'xi-api-key': elevenlabs_key, 'Content-Type': 'application/json'},
-                json={'text': text[:500], 'model_id': 'eleven_monolingual_v1',
-                      'voice_settings': {'stability': 0.5, 'similarity_boost': 0.75}},
+                json={
+                    'text': narration,
+                    'model_id': 'eleven_monolingual_v1',
+                    'voice_settings': {
+                        'stability': 0.45,
+                        'similarity_boost': 0.80,
+                        'style': 0.35,
+                        'use_speaker_boost': True
+                    }
+                },
                 timeout=30
             )
             if r.status_code == 200:
                 with open(output_path, 'wb') as f:
                     f.write(r.content)
                 if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
-                    logger.info('✅ ElevenLabs TTS')
+                    logger.info(f'✅ ElevenLabs TTS success')
                     return True
-            logger.warning(f'ElevenLabs failed: {r.status_code}')
+            logger.warning(f'ElevenLabs failed: {r.status_code} {r.text[:80]}')
         except Exception as e:
             logger.error(f'ElevenLabs error: {e}')
 
-    # 3. gTTS — always works, no key needed
+    # 2. Groq Orpheus — free fallback
+    if groq_key:
+        try:
+            styled = f'[deep] {narration}' if style == 'conspiracy' else narration
+            wav_path = output_path.replace('.mp3', '.wav')
+            if groq_tts(styled, wav_path, groq_key, voice='atlas'):
+                subprocess.run([
+                    'ffmpeg', '-i', wav_path, '-acodec', 'libmp3lame',
+                    '-q:a', '2', '-y', output_path, '-loglevel', 'quiet'
+                ], capture_output=True, timeout=30)
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                    logger.info('✅ Groq Orpheus TTS')
+                    return True
+        except Exception as e:
+            logger.error(f'Groq TTS error: {e}')
+
+    # 3. gTTS — always works
     try:
         from gtts import gTTS
-        tts = gTTS(text=text[:500], lang='en', slow=False)
+        tts = gTTS(text=narration, lang='en', slow=False)
         tts.save(output_path)
         if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
             logger.info('✅ gTTS fallback')
@@ -3955,7 +3963,7 @@ def text_to_speech(text, output_path, style='normal'):
     except Exception as e:
         logger.error(f'gTTS error: {e}')
 
-    logger.error('❌ All TTS methods failed')
+    logger.error('❌ All TTS failed')
     return False
 
 

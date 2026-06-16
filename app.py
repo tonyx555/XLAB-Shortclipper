@@ -2578,28 +2578,37 @@ def smart_fetch_visuals(item, work_dir, idx):
             logger.info(f'Manual URL download result: {dl_path}')
             add_log_safe(f'   📹 Download: {"✅" if dl_path else "❌ Failed"}')
             if dl_path:
+                add_log_safe(f'   ✅ Downloaded! Processing...')
                 try:
                     dur = get_duration(dl_path)
-                    add_log_safe(f'   📹 Downloaded {dur:.0f}s video — cutting best 25s')
+                    add_log_safe(f'   📹 {dur:.0f}s video — trimming to 25s')
+                    
+                    # Simple trim — just cut to 25s from 10% in
                     start = max(0, dur * 0.1)
-                    cut_path = f'{work_dir}/manual_cut_{idx}.mp4'
-                    cut_vertical(dl_path, start, 25, cut_path, is_vertical(dl_path))
-                    # If cut failed just use raw download
-                    if not os.path.exists(cut_path) or os.path.getsize(cut_path) < 10000:
-                        add_log_safe(f'   ⚠️ Cut failed — using raw download')
-                        cut_path = dl_path
-                    if not is_vertical(cut_path):
-                        vert = f'{work_dir}/manual_vert_{idx}.mp4'
-                        if smart_crop_vertical(cut_path, vert):
-                            cut_path = vert
-                    add_log_safe(f'   ✅ Manual URL clip ready')
-                    return cut_path, 'youtube_manual'
+                    trimmed = f'{work_dir}/manual_trim_{idx}.mp4'
+                    r = subprocess.run([
+                        'ffmpeg', '-ss', str(start), '-i', dl_path,
+                        '-t', '25',
+                        '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
+                        '-c:a', 'aac', '-b:a', '128k',
+                        '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30',
+                        '-pix_fmt', 'yuv420p',
+                        '-movflags', '+faststart',
+                        '-y', trimmed, '-loglevel', 'quiet'
+                    ], capture_output=True, timeout=120)
+                    
+                    if os.path.exists(trimmed) and os.path.getsize(trimmed) > 100000:
+                        add_log_safe(f'   ✅ YouTube clip ready ({os.path.getsize(trimmed)//1024//1024}MB)')
+                        return trimmed, 'youtube_manual'
+                    
+                    # Fallback — use raw file
+                    add_log_safe(f'   ⚠️ Trim failed — using raw download')
+                    return dl_path, 'youtube_manual'
+                    
                 except Exception as e:
-                    logger.error(f'Manual URL error: {e}')
-                    add_log_safe(f'   ⚠️ Processing error: {str(e)[:40]}')
-                    # Still use raw download even if processing fails
-                    if dl_path and os.path.exists(dl_path):
-                        return dl_path, 'youtube_manual'
+                    logger.error(f'Manual URL processing error: {e}')
+                    add_log_safe(f'   ⚠️ Error: {str(e)[:40]} — using raw')
+                    return dl_path, 'youtube_manual'
 
     # 1. YouTube FIRST — most relevant results
     add_log_safe('   📹 Searching YouTube for relevant footage...')
@@ -3176,15 +3185,16 @@ def build_conspiracy_short(job_id, item, work_dir, idx, grok_key, character_path
             narr_path = f'{work_dir}/narr_{idx}.mp3'
             narrated = f'{work_dir}/narrated_{idx}.mp4'
             # Use FULL script — hook + body + key facts
-            full_script = item.get('script', '')
-            if not full_script or len(full_script) < 30:
-                # Build from parts if script is empty
-                full_script = (
-                    item.get('hook', '') + '. ' +
-                    ' '.join(item.get('key_facts', [])) + '. ' +
-                    item.get('script', '')
-                ).strip()
-            logger.info(f'Narrating script: {full_script[:80]}')
+            # Build full narration from all available content
+            parts = []
+            if item.get('hook'): parts.append(item['hook'])
+            if item.get('script'): parts.append(item['script'])
+            if item.get('key_facts'): parts.extend(item['key_facts'][:3])
+            full_script = '. '.join([p for p in parts if p and len(p) > 5])
+            if not full_script:
+                full_script = item.get('title', 'The truth has been hidden from you')
+            logger.info(f'Narrating ({len(full_script)} chars): {full_script[:120]}')
+            add_log(job_id, f'   📝 Script: {full_script[:60]}...')
             if text_to_speech(full_script, narr_path, style='conspiracy'):
                 if overlay_narration(demo_path, narr_path, narrated):
                     if os.path.exists(narrated):
@@ -4045,12 +4055,14 @@ def concatenate_clips(clip_paths, output_path):
             for cp in norm_paths:
                 f.write(f"file '{cp}'\n")
 
-        # Re-encode to ensure audio is preserved across all clips
+        # Re-encode with audio padding to prevent cutoff
         cmd = [
             'ffmpeg', '-f', 'concat', '-safe', '0',
             '-i', concat_file,
+            '-vf', 'fps=30',
             '-c:v', 'libx264', '-preset', 'fast', '-crf', '22',
-            '-c:a', 'aac', '-b:a', '128k',
+            '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2',
+            '-af', 'apad',
             '-pix_fmt', 'yuv420p',
             '-movflags', '+faststart',
             '-y', output_path, '-loglevel', 'quiet'

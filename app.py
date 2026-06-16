@@ -5500,33 +5500,79 @@ def research_search():
     items = []
 
     if search_type == 'yt':
-        # YouTube search via RapidAPI
         api_key = os.environ.get('RAPIDAPI_KEY', '')
-        if api_key:
-            try:
-                r = req.get(
-                    'https://youtube-media-downloader.p.rapidapi.com/v2/search/videos',
-                    params={'query': query, 'hl': 'en', 'gl': 'US'},
-                    headers={
-                        'x-rapidapi-key': api_key,
-                        'x-rapidapi-host': 'youtube-media-downloader.p.rapidapi.com'
-                    },
-                    timeout=15
-                )
-                for v in r.json().get('items', [])[:8]:
-                    vid_id = v.get('id', '')
-                    thumb = ''
-                    thumbs = v.get('thumbnails', [])
-                    if thumbs:
-                        thumb = thumbs[0].get('url', '') if isinstance(thumbs[0], dict) else ''
-                    items.append({
-                        'title': v.get('title', '')[:60],
-                        'url': f'https://youtube.com/watch?v={vid_id}',
-                        'thumbnail': thumb,
-                        'meta': v.get('publishedTimeText', '') + ' · ' + str(v.get('viewCount', {}).get('text', ''))
-                    })
-            except Exception as e:
-                logger.error(f'YouTube research search error: {e}')
+        if not api_key:
+            items.append({'title': 'No RAPIDAPI_KEY set in Railway', 'url': '', 'meta': 'Add RAPIDAPI_KEY to Railway variables'})
+        else:
+            # Try multiple search endpoints
+            search_endpoints = [
+                {
+                    'url': 'https://youtube-media-downloader.p.rapidapi.com/v2/search/videos',
+                    'host': 'youtube-media-downloader.p.rapidapi.com',
+                    'params': {'query': query, 'hl': 'en', 'gl': 'US'},
+                    'items_key': 'items'
+                },
+                {
+                    'url': 'https://yt-api.p.rapidapi.com/search',
+                    'host': 'yt-api.p.rapidapi.com',
+                    'params': {'query': query, 'hl': 'en', 'gl': 'US'},
+                    'items_key': 'data'
+                },
+                {
+                    'url': 'https://youtube-search-and-download.p.rapidapi.com/search',
+                    'host': 'youtube-search-and-download.p.rapidapi.com',
+                    'params': {'query': query, 'hl': 'en'},
+                    'items_key': 'contents'
+                }
+            ]
+            
+            for ep in search_endpoints:
+                try:
+                    r = req.get(
+                        ep['url'],
+                        params=ep['params'],
+                        headers={
+                            'x-rapidapi-key': api_key,
+                            'x-rapidapi-host': ep['host']
+                        },
+                        timeout=15
+                    )
+                    data_r = r.json()
+                    logger.info(f'YouTube search via {ep["host"]}: status={r.status_code} keys={list(data_r.keys())[:5]}')
+                    
+                    vids = data_r.get(ep['items_key'], [])
+                    if not vids and r.status_code == 200:
+                        # Try other common keys
+                        for k in ['items', 'data', 'results', 'videos', 'contents']:
+                            if data_r.get(k):
+                                vids = data_r[k]
+                                break
+                    
+                    if vids:
+                        for v in vids[:8]:
+                            # Handle different response formats
+                            vid_id = v.get('id') or v.get('videoId') or (v.get('video', {}) or {}).get('videoId', '')
+                            title = v.get('title') or (v.get('video', {}) or {}).get('title', '')
+                            thumbs = v.get('thumbnails', []) or v.get('thumbnail', [])
+                            thumb = ''
+                            if thumbs:
+                                t = thumbs[0] if isinstance(thumbs, list) else thumbs
+                                thumb = t.get('url', '') if isinstance(t, dict) else ''
+                            
+                            if vid_id and title:
+                                items.append({
+                                    'title': str(title)[:60],
+                                    'url': f'https://youtube.com/watch?v={vid_id}',
+                                    'thumbnail': thumb,
+                                    'meta': v.get('publishedTimeText', '') or v.get('publishedTime', '')
+                                })
+                        
+                        if items:
+                            break  # Got results, stop trying endpoints
+                            
+                except Exception as e:
+                    logger.error(f'YouTube search error ({ep["host"]}): {e}')
+                    continue
 
     elif search_type == 'x':
         # X/Twitter search
